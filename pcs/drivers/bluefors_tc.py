@@ -95,7 +95,7 @@ class Channel:
     def __init__(self,bftc,channel_num):
         self.bftc = bftc
         self.channel_num = channel_num
-        self.cal_curve_num = self.get_cal_curve_num()
+        self.cal_curve_num = self.get_cal_curve_number()
 
     def get_state(self):
         """
@@ -103,7 +103,7 @@ class Channel:
         
            Possible outputs are True (channel is active) and False (not active).
         """
-        return self.bftc.msg('/channel',{})['active']
+        return self.bftc.msg('/channel',{'channel_nr': self.channel_num})['active']
         
     def enable_channel(self):
         """
@@ -113,22 +113,22 @@ class Channel:
                    'active': True}
         path = '/channel/update'
         
-        resp = self.bftc.msg(path,message)['active']
+        resp = self.bftc.msg(path,message)
         
         if resp['active']:
             print("Channel {} successfully enabled.".format(self.channel_num))
         else:
             print("Channel {} failed to enable. Please investigate.".format(self.channel_num))
 
-    def enable_channel(self):
+    def disable_channel(self):
         """
-            Sets the state of the channel to active.
+            Sets the state of the channel to inactive.
         """
         message = {'channel_nr': self.channel_num, 
                    'active': False}
         path = '/channel/update'
         
-        resp = self.bftc.msg(path,message)['active']
+        resp = self.bftc.msg(path,message)
         
         if not resp['active']:
             print("Channel {} successfully disabled.".format(self.channel_num))

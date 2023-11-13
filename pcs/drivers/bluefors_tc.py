@@ -13,9 +13,9 @@ class BFTC:
             timeout (int) - number of seconds to wait for HTTP requests to go through
             http_root (str) - beginning of the path for any HTTP command for this device
             channels (list) - list of channel objects, index+1 corresponds to channel number
-            sample_heater (obj) - Heater class object for the sample heater
+            mxc_heater (obj) - Heater class object for the MXC heater
             still_heater (obj) - Heater class object for the still heater
-            
+
     """
 
     def __init__(self,ip,port='5001',timeout=10,num_channels=12):
@@ -30,14 +30,14 @@ class BFTC:
             c = Channel(self,i)
             self.channels.append(c)
         # The BFTC supports four heaters, but heaters 1 and 2 are heat switches
-        self.sample_heater = Heater(self,3)
-        self.still_heater = Heater(self,4)
+        self.still_heater = Heater(self,3)
+        self.mxc_heater = Heater(self,4)
 
 
     def msg(self,path,message):
         """
             Send message to the BF TC over HTTP via the requests package.
-            
+
             Parameters:
             path (str) - the location in the BF TC API of the command you want
                         Ex.: "/heater" accesses commands for a heater
@@ -48,37 +48,37 @@ class BFTC:
                              a dictionary with keys.
         """
         url = self.http_root + path
-        
+
         if len(list(message.keys())) != 0:
-            # Try once - if we timeout, try again for post requests. 
+            # Try once - if we timeout, try again for post requests.
             # Aiming to avoid single glitches in return message.
             for attempt in range(2):
                 try:
                     req = requests.post(url, json=message, timeout=self.timeout)
                 except requests.Timeout:
-                    print("Warning: Caught timeout waiting for response to {} at"                      
+                    print("Warning: Caught timeout waiting for response to {} at"
                           " {}, trying again before giving up".format(message,path))
                     if attempt == 1:
                         raise RuntimeError('Query response to BF TC timed out after'
                                            ' two attempts. Check connection.')
         else:
             req = requests.get(url, timeout=self.timeout)
-        
+
         resp = req.json()
         return resp
-        
-        
+
+
     def get_serial(self):
         """Returns serial number of device (str)"""
         return self.msg('/system',{})['serial']
-        
+
     def get_ip_address(self):
         """Returns IP address of device (str)"""
         return self.msg('/system/network',{})['ip_address']
 
     def get_mac_address(self):
         """Returns MAC address of device (str)"""
-        return self.msg('/system/network',{})['mac_address']        
+        return self.msg('/system/network',{})['mac_address']
 
 class Channel:
     """
@@ -89,9 +89,9 @@ class Channel:
             channel_num (int) - the channel number on the BFTC
             curve_num (int) - the curve number that goes with this channel
                               (if one is present)
-        
+
     """
-    
+
     def __init__(self,bftc,channel_num):
         self.bftc = bftc
         self.channel_num = channel_num
@@ -100,11 +100,11 @@ class Channel:
     def get_state(self):
         """
            Returns the active state of the channel (bool)
-        
+
            Possible outputs are True (channel is active) and False (not active).
         """
         return self.bftc.msg('/channel',{'channel_nr': self.channel_num})['active']
-        
+
     def enable_channel(self):
         """
             Sets the state of the channel to active.
@@ -141,31 +141,48 @@ class Channel:
         
            Possible outputs are 0 (current excitation), 1 (VMAX), and 2 (CMN)
         """
-        return self.bftc.msg('/channel',{})['excitation_mode']
-        
+        message = {'channel_nr': self.channel_num}
+
+        return self.bftc.msg('/channel',message)['excitation_mode']
+
     def get_temperature(self):
         """
            Returns the most recent temperature of the channel in K (float).
         """
         message = {'channel_nr': self.channel_num}
-        
-        return self.bftc.msg('/channel/measurement/latest', message)['temperature']
-        
+
+        try:
+            resp = self.bftc.msg('/channel/measurement/latest',message)['temperature']
+            return resp
+        except KeyError as ke:
+            print('Key not found in /channel/measurement/latest: ', ke)
+            return ""
+
     def get_resistance(self):
         """
            Returns the most recent resistance of the channel in ohms (float).
         """
         message = {'channel_nr': self.channel_num}
         
-        return self.bftc.msg('/channel/measurement/latest', message)['resistance']
+        try:
+            resp = self.bftc.msg('/channel/measurement/latest',message)['resistance']
+            return resp
+        except KeyError as ke:
+            print('Key not found in /channel/measurement/latest: ', ke)
+            return ""
 
     def get_reactance(self):
         """
            Returns the most recent reactance of the channel in ohms (float).
         """
         message = {'channel_nr': self.channel_num}
-        
-        return self.bftc.msg('/channel/measurement/latest', message)['reactance']    
+
+        try:
+            resp = self.bftc.msg('/channel/measurement/latest',message)['reactance']
+            return resp
+        except KeyError as ke:
+            print('Key not found in /channel/measurement/latest: ', ke)
+            return ""    
         
     def get_excitation_current_range(self):
         pass
@@ -214,10 +231,13 @@ class Channel:
         """
            Returns the calibration curve number associated with the channel (int).
         
-           The returned channel number will be between 1 and 100. Should check what happens if no curve is enabled!
+           The returned channel number will be between 1 and 100. 
+           
+           If no curve has been specially set, the curve number will just be the
+           channel number - there may be no curve uploaded to this number though!
         """
         message = {'channel_nr': self.channel_num}
-        
+
         return self.bftc.msg('/channel',message)['calib_curve_nr']
         
     def set_cal_curve_number(self,cal_curve_num):
@@ -314,6 +334,40 @@ class Curve:
     # Need to examine how the BFTC handles curves and how it is the same
     # or different compared to the way the Lakeshore does before sketching
     # out functions.
+    
+    def get_name(self):
+        pass
+
+    def get_sensor_model(self):
+        pass
+
+    def get_type(self):
+        """Should be 1 for a standard R->T curve"""
+        pass
+
+    def num_points(self):
+        pass
+
+    def get_impedances(self):
+        pass
+
+    def get_temperatures(self):
+        pass
         
+    def upload_curve(self,input_file):
+        """This is the more complicated one to define - we need to look at how to parse
+           a standard Lakeshore calibration curve file into the correct name,
+           resistances (impedances), temperatures, number of points, sensor
+           model, and anything else that it might need. Those things can be
+           loaded in with a single POST command after parsing the input file.
+           Probably want to make helper functions to do each step in case we
+           ever want to manually adjust those things remotely.
+           
+           It looks like there may be a way to upload the whole calibration
+           curve file as a string, but we'd have to test that."""
+        pass
+    
+    def remove_curve(self):
+        pass
 
 

@@ -13,8 +13,8 @@ class BFTC:
             timeout (int) - number of seconds to wait for HTTP requests to go through
             http_root (str) - beginning of the path for any HTTP command for this device
             channels (list) - list of channel objects, index+1 corresponds to channel number
-            mxc_heater (obj) - Heater class object for the MXC heater
             still_heater (obj) - Heater class object for the still heater
+            mxc_heater (obj) - Heater class object for the MXC heater
 
     """
 
@@ -103,7 +103,9 @@ class Channel:
 
            Possible outputs are True (channel is active) and False (not active).
         """
-        return self.bftc.msg('/channel',{'channel_nr': self.channel_num})['active']
+        message = {'channel_nr': self.channel_num}
+        
+        return self.bftc.msg('/channel', message)['active']
 
     def enable_channel(self):
         """
@@ -113,7 +115,7 @@ class Channel:
                    'active': True}
         path = '/channel/update'
         
-        resp = self.bftc.msg(path,message)
+        resp = self.bftc.msg(path, message)
         
         if resp['active']:
             print("Channel {} successfully enabled.".format(self.channel_num))
@@ -128,7 +130,7 @@ class Channel:
                    'active': False}
         path = '/channel/update'
         
-        resp = self.bftc.msg(path,message)
+        resp = self.bftc.msg(path, message)
         
         if not resp['active']:
             print("Channel {} successfully disabled.".format(self.channel_num))
@@ -143,7 +145,10 @@ class Channel:
         """
         message = {'channel_nr': self.channel_num}
 
-        return self.bftc.msg('/channel',message)['excitation_mode']
+        return self.bftc.msg('/channel', message)['excitation_mode']
+
+    def set_excitation_mode(self):
+        pass
 
     def get_temperature(self):
         """
@@ -152,10 +157,11 @@ class Channel:
         message = {'channel_nr': self.channel_num}
 
         try:
-            resp = self.bftc.msg('/channel/measurement/latest',message)['temperature']
+            resp = self.bftc.msg('/channel/measurement/latest', message)['temperature']
             return resp
         except KeyError as ke:
             print('Key not found in /channel/measurement/latest: ', ke)
+            print('Make sure channel is active and measuring temperatures.')
             return ""
 
     def get_resistance(self):
@@ -165,10 +171,11 @@ class Channel:
         message = {'channel_nr': self.channel_num}
         
         try:
-            resp = self.bftc.msg('/channel/measurement/latest',message)['resistance']
+            resp = self.bftc.msg('/channel/measurement/latest', message)['resistance']
             return resp
         except KeyError as ke:
             print('Key not found in /channel/measurement/latest: ', ke)
+            print('Make sure channel is active and measuring resistances.')
             return ""
 
     def get_reactance(self):
@@ -178,10 +185,11 @@ class Channel:
         message = {'channel_nr': self.channel_num}
 
         try:
-            resp = self.bftc.msg('/channel/measurement/latest',message)['reactance']
+            resp = self.bftc.msg('/channel/measurement/latest', message)['reactance']
             return resp
         except KeyError as ke:
             print('Key not found in /channel/measurement/latest: ', ke)
+            print('Make sure channel is active and measuring reactances.')
             return ""    
         
     def get_excitation_current_range(self):
@@ -212,7 +220,14 @@ class Channel:
         pass
     
     def get_wait_time(self):
-        pass
+        """
+           Returns the wait time if not using default timeconstants (float)
+        """
+        # Do we need to check if use_non_default_timeconstants=True to see if
+        # this key will exist?
+        message = {'channel_nr': self.channel_num}
+
+        return self.bftc.msg('/channel', message)['wait_time']
         
     def set_wait_time(self,wait_time):
         # Only matters if not using default time constants - should check that
@@ -220,7 +235,14 @@ class Channel:
         pass
 
     def get_meas_time(self):
-        pass
+        """
+           Returns the measurement time if not using default timeconstants (float)
+        """
+        # Do we need to check if use_non_default_timeconstants=True to see if
+        # this key will exist?
+        message = {'channel_nr': self.channel_num}
+
+        return self.bftc.msg('/channel', message)['meas_time']
         
     def set_meas_time(self,meas_time):
         # Only matters if not using default time constants - should check that
@@ -238,7 +260,7 @@ class Channel:
         """
         message = {'channel_nr': self.channel_num}
 
-        return self.bftc.msg('/channel',message)['calib_curve_nr']
+        return self.bftc.msg('/channel', message)['calib_curve_nr']
         
     def set_cal_curve_number(self,cal_curve_num):
         pass        
@@ -260,13 +282,44 @@ class Heater:
         # Should we make more parameters object variables?
         
     def get_state(self):
-        pass
+        """
+           Returns the active state of the heater (bool)
+
+           Possible outputs are True (heater is active) and False (not active).
+        """
+        message = {'heater_nr': self.heater_num}
+        
+        return self.bftc.msg('/heater', message)['active']
     
     def enable_heater(self):
-        pass
+        """
+            Sets the state of the heater to active.
+        """
+        message = {'heater_nr': self.heater_num, 
+                   'active': True}
+        path = '/heater/update'
+        
+        resp = self.bftc.msg(path, message)
+        
+        if resp['active']:
+            print("Heater {} successfully enabled.".format(self.heater_num))
+        else:
+            print("Heater {} failed to enable. Please investigate.".format(self.heater_num))
     
     def disable_heater(self):
-        pass
+        """
+            Sets the state of the heater to inactive.
+        """
+        message = {'heater_nr': self.heater_num, 
+                   'active': False}
+        path = '/heater/update'
+        
+        resp = self.bftc.msg(path, message)
+        
+        if not resp['active']:
+            print("Heater {} successfully disabled.".format(self.heater_num))
+        else:
+            print("Heater {} failed to disable. Please investigate.".format(self.heater_num))
         
     def get_pid_mode(self):
         pass
@@ -281,13 +334,44 @@ class Heater:
         pass
     
     def get_power(self):
-        pass
+        """
+           Returns the current applied manual heater power in Watts (float).
+        """
+        message = {'heater_nr': self.heater_num}
+
+        return self.bftc.msg('/heater', message)['power']
     
     def set_power(self,power):
-        pass
+        """
+           Sets the current applied manual heater power in Watts (float).
+           
+           Parameters:
+               power (float) - the manual power in W that the heater should be 
+                               set to use - needs to be a float between 
+                               0.0 and 1.0
+        """
+        # Check that the power to set is in range
+        assert 0.0 <= power <= 1.0, "{} is not in the valid range of 0 to 1 for power".format(power)
+        # Check that the power to set is less than the hard limit
+        assert power <= self.get_max_power(), "{} is not below the current power safety limit".format(power)
+        
+        message = {'heater_nr': self.heater_num,
+                   'power': power}
+
+        resp = self.bftc.msg('/heater/update', message)
+        
+        if resp['power'] == power:
+            print("Heater {} manual power changed to {}.".format(self.heater_num,power))
+        else:
+            print("Heater {} failed to change power correctly. Please investigate.".format(self.heater_num))
         
     def get_max_power(self):
-        pass
+        """
+           Returns the hard safety limit for applied manual heater power in Watts (float).
+        """
+        message = {'heater_nr': self.heater_num}
+
+        return self.bftc.msg('/heater', message)['max_power']
         
     def set_max_power(self,max_power):
         pass

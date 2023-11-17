@@ -124,7 +124,7 @@ class Bluefors_TC_Agent:
         if params is None:
             params = {}
         if self.initialized and not params.get('force', False):
-            self.log.info("Lakeshore already initialized. Returning...")
+            self.log.info("BF TC already initialized. Returning...")
             return True, "Already initialized"
 
         with self._lock.acquire_timeout(job='init') as acquired1, \

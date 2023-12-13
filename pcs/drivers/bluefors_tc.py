@@ -9,7 +9,7 @@ class BFTC:
 
         Attributes:
             ip (str) - IP address of the BFTC
-            port (str) - Port number at which the HTTP commands are 
+            port (str) - Port number at which the HTTP commands are
             timeout (int) - number of seconds to wait for HTTP requests to go through
             http_root (str) - beginning of the path for any HTTP command for this device
             channels (list) - list of channel objects, index+1 corresponds to channel number
@@ -80,6 +80,28 @@ class BFTC:
         """Returns MAC address of device (str)"""
         return self.msg('/system/network',{})['mac_address']
 
+    def get_latest_measurement(self):
+        """
+            Returns a dictionary of information from the most recent measurement.
+            There is currently no functionality in the BF TC to turn off
+            automatically scanning through all enabled channels and recording
+            their info in turn.
+
+            Dictionary keys: 'channel_nr', 'resistance' (ohms), 'reactance'
+                             (ohms), 'temperature' (only if a calibration curve
+                             is assigned - K), 'rez' (real impedence - ohms),
+                             'imz' (img. impedence - ohms), 'magnitude' (ohms),
+                             'angle' (degrees), 'timestamp'
+        """
+        return self.msg('/channel/measurement/latest', {})
+
+    def get_latest_channel(self):
+        """
+            Returns current measurement channel or last used channel
+        """
+        return self.msg('/statemachine',{})['channel_nr']
+
+
 class Channel:
     """
         Class for thermometer channels on the BFTC.
@@ -104,19 +126,19 @@ class Channel:
            Possible outputs are True (channel is active) and False (not active).
         """
         message = {'channel_nr': self.channel_num}
-        
+
         return self.bftc.msg('/channel', message)['active']
 
     def enable_channel(self):
         """
             Sets the state of the channel to active.
         """
-        message = {'channel_nr': self.channel_num, 
+        message = {'channel_nr': self.channel_num,
                    'active': True}
         path = '/channel/update'
-        
+
         resp = self.bftc.msg(path, message)
-        
+
         if resp['active']:
             print("Channel {} successfully enabled.".format(self.channel_num))
         else:
@@ -126,12 +148,12 @@ class Channel:
         """
             Sets the state of the channel to inactive.
         """
-        message = {'channel_nr': self.channel_num, 
+        message = {'channel_nr': self.channel_num,
                    'active': False}
         path = '/channel/update'
-        
+
         resp = self.bftc.msg(path, message)
-        
+
         if not resp['active']:
             print("Channel {} successfully disabled.".format(self.channel_num))
         else:
@@ -140,7 +162,7 @@ class Channel:
     def get_excitation_mode(self):
         """
            Returns the excitation mode of the channel (int).
-        
+
            Possible outputs are 0 (current excitation), 1 (VMAX), and 2 (CMN)
         """
         message = {'channel_nr': self.channel_num}
@@ -150,75 +172,33 @@ class Channel:
     def set_excitation_mode(self):
         pass
 
-    def get_temperature(self):
-        """
-           Returns the most recent temperature of the channel in K (float).
-        """
-        message = {'channel_nr': self.channel_num}
-
-        try:
-            resp = self.bftc.msg('/channel/measurement/latest', message)['temperature']
-            return resp
-        except KeyError as ke:
-            print('Key not found in /channel/measurement/latest: ', ke)
-            print('Make sure channel is active and measuring temperatures.')
-            return ""
-
-    def get_resistance(self):
-        """
-           Returns the most recent resistance of the channel in ohms (float).
-        """
-        message = {'channel_nr': self.channel_num}
-        
-        try:
-            resp = self.bftc.msg('/channel/measurement/latest', message)['resistance']
-            return resp
-        except KeyError as ke:
-            print('Key not found in /channel/measurement/latest: ', ke)
-            print('Make sure channel is active and measuring resistances.')
-            return ""
-
-    def get_reactance(self):
-        """
-           Returns the most recent reactance of the channel in ohms (float).
-        """
-        message = {'channel_nr': self.channel_num}
-
-        try:
-            resp = self.bftc.msg('/channel/measurement/latest', message)['reactance']
-            return resp
-        except KeyError as ke:
-            print('Key not found in /channel/measurement/latest: ', ke)
-            print('Make sure channel is active and measuring reactances.')
-            return ""    
-        
     def get_excitation_current_range(self):
         pass
-    
+
     def set_excitation_current_range(self,cur_range):
         pass
-    
+
     def get_excitation_cmn_range(self):
         pass
-    
+
     def set_excitation_cmn_range(self,cmn_range):
-        pass    
+        pass
 
     def get_excitation_vmax_range(self):
         pass
-    
+
     def set_excitation_vmax_range(self,vmax_range):
         pass
-        
+
     def get_use_non_default_timecon(self):
         pass
-    
+
     def enable_use_non_default_timecon(self):
         pass
-    
+
     def disable_use_non_default_timecon(self):
         pass
-    
+
     def get_wait_time(self):
         """
            Returns the wait time if not using default timeconstants (float)
@@ -228,7 +208,7 @@ class Channel:
         message = {'channel_nr': self.channel_num}
 
         return self.bftc.msg('/channel', message)['wait_time']
-        
+
     def set_wait_time(self,wait_time):
         # Only matters if not using default time constants - should check that
         # before allowing this method to go through
@@ -243,27 +223,27 @@ class Channel:
         message = {'channel_nr': self.channel_num}
 
         return self.bftc.msg('/channel', message)['meas_time']
-        
+
     def set_meas_time(self,meas_time):
         # Only matters if not using default time constants - should check that
         # before allowing this method to go through
         pass
-        
+
     def get_cal_curve_number(self):
         """
            Returns the calibration curve number associated with the channel (int).
-        
-           The returned channel number will be between 1 and 100. 
-           
+
+           The returned channel number will be between 1 and 100.
+
            If no curve has been specially set, the curve number will just be the
            channel number - there may be no curve uploaded to this number though!
         """
         message = {'channel_nr': self.channel_num}
 
         return self.bftc.msg('/channel', message)['calib_curve_nr']
-        
+
     def set_cal_curve_number(self,cal_curve_num):
-        pass        
+        pass
 
 class Heater:
     """
@@ -272,15 +252,15 @@ class Heater:
         Attributes:
             bftc (obj) - BFTC object with which this Channel is associated
             heater_num (int) - the heater number on the BFTC
-        
+
     """
 
     def __init__(self,bftc,heater_num):
         self.bftc = bftc
         self.heater_num = heater_num
-        
+
         # Should we make more parameters object variables?
-        
+
     def get_state(self):
         """
            Returns the active state of the heater (bool)
@@ -288,51 +268,51 @@ class Heater:
            Possible outputs are True (heater is active) and False (not active).
         """
         message = {'heater_nr': self.heater_num}
-        
+
         return self.bftc.msg('/heater', message)['active']
-    
+
     def enable_heater(self):
         """
             Sets the state of the heater to active.
         """
-        message = {'heater_nr': self.heater_num, 
+        message = {'heater_nr': self.heater_num,
                    'active': True}
         path = '/heater/update'
-        
+
         resp = self.bftc.msg(path, message)
-        
+
         if resp['active']:
             print("Heater {} successfully enabled.".format(self.heater_num))
         else:
             print("Heater {} failed to enable. Please investigate.".format(self.heater_num))
-    
+
     def disable_heater(self):
         """
             Sets the state of the heater to inactive.
         """
-        message = {'heater_nr': self.heater_num, 
+        message = {'heater_nr': self.heater_num,
                    'active': False}
         path = '/heater/update'
-        
+
         resp = self.bftc.msg(path, message)
-        
+
         if not resp['active']:
             print("Heater {} successfully disabled.".format(self.heater_num))
         else:
             print("Heater {} failed to disable. Please investigate.".format(self.heater_num))
-        
+
     def get_pid_mode(self):
         pass
-    
+
     def set_pid_mode(self,mode):
         pass
-    
+
     def get_resistance(self):
         pass
-        
+
     def set_resistance(self,res):
         pass
-    
+
     def get_power(self):
         """
            Returns the current applied manual heater power in Watts (float).
@@ -340,31 +320,31 @@ class Heater:
         message = {'heater_nr': self.heater_num}
 
         return self.bftc.msg('/heater', message)['power']
-    
+
     def set_power(self,power):
         """
            Sets the current applied manual heater power in Watts (float).
-           
+
            Parameters:
-               power (float) - the manual power in W that the heater should be 
-                               set to use - needs to be a float between 
+               power (float) - the manual power in W that the heater should be
+                               set to use - needs to be a float between
                                0.0 and 1.0
         """
         # Check that the power to set is in range
         assert 0.0 <= power <= 1.0, "{} is not in the valid range of 0 to 1 for power".format(power)
         # Check that the power to set is less than the hard limit
         assert power <= self.get_max_power(), "{} is not below the current power safety limit".format(power)
-        
+
         message = {'heater_nr': self.heater_num,
                    'power': power}
 
         resp = self.bftc.msg('/heater/update', message)
-        
+
         if resp['power'] == power:
             print("Heater {} manual power changed to {}.".format(self.heater_num,power))
         else:
             print("Heater {} failed to change power correctly. Please investigate.".format(self.heater_num))
-        
+
     def get_max_power(self):
         """
            Returns the hard safety limit for applied manual heater power in Watts (float).
@@ -372,28 +352,28 @@ class Heater:
         message = {'heater_nr': self.heater_num}
 
         return self.bftc.msg('/heater', message)['max_power']
-        
+
     def set_max_power(self,max_power):
         pass
-    
+
     def get_target_temperature(self):
         pass
-        
+
     def set_target_temperature(self):
         # Believe this is for manual mode only
         pass
-    
+
     def get_setpoint(self):
         pass
-    
+
     def set_setpoint(self,setpoint):
         # Should be setpoint for standard PID mode
         pass
-    
+
     def get_pid_settings(self):
         # Return P, I, and D
         pass
-    
+
     def set_pid_settings(self,p,i,d):
         # Set them all every time? Options to only update one?
         pass
@@ -401,7 +381,7 @@ class Heater:
 class Curve:
     """
         Class to handle thermometer calibration curves on the BFTC.
-        
+
         Attributes:
         bftc (obj) - BFTC object with which this Curve is associated
         curve_num (int) - the curve number on the BFTC
@@ -409,16 +389,16 @@ class Curve:
     def __init__(self,bftc,curve_num):
         self.bftc = bftc
         self.curve_number = curve_num
-        
+
         self.name = None
         self.sensor_model = None
         self.type = None
         self.num_points = None
-        
+
     # Need to examine how the BFTC handles curves and how it is the same
     # or different compared to the way the Lakeshore does before sketching
     # out functions.
-    
+
     def get_name(self):
         pass
 
@@ -437,7 +417,7 @@ class Curve:
 
     def get_temperatures(self):
         pass
-        
+
     def upload_curve(self,input_file):
         """This is the more complicated one to define - we need to look at how to parse
            a standard Lakeshore calibration curve file into the correct name,
@@ -446,12 +426,10 @@ class Curve:
            loaded in with a single POST command after parsing the input file.
            Probably want to make helper functions to do each step in case we
            ever want to manually adjust those things remotely.
-           
+
            It looks like there may be a way to upload the whole calibration
            curve file as a string, but we'd have to test that."""
         pass
-    
+
     def remove_curve(self):
         pass
-
-

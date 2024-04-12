@@ -32,6 +32,7 @@ class BFTC:
         # The BFTC supports four heaters, but heaters 1 and 2 are heat switches
         self.still_heater = Heater(self,3)
         self.mxc_heater = Heater(self,4)
+        self.id = self.get_serial()
 
 
     def msg(self,path,message):

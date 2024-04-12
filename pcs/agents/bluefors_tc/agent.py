@@ -165,8 +165,102 @@ class Bluefors_TC_Agent:
 
         return True, 'BF TC initialized.'
     
+    @ocs_agent.param('_')
     def acq(self, session, params=None):
-        pass
+        """acq()
+
+        **Process** - Acquire data from the BF TC. Set to check for new data at
+                      2 Hz - this needs to be adjusted if wait_time+meas_time
+                      in the BF TC is shorter than a second (it is much longer
+                      than 1 sec by default).
+
+        Notes:
+            The most recent data collected is stored in session data in the
+            structure::
+
+                >>> response.session['data']
+                {"fields":
+                    {"Channel_05": {"T": 293.644, "R": 33.752, "timestamp": 1601924482.722671},
+                     "Channel_06": {"T": 0, "R": 1022.44, "timestamp": 1601924499.5258765},
+                     "Channel_08": {"T": 0, "R": 1026.98, "timestamp": 1601924494.8172355},
+                     "Channel_01": {"T": 293.41, "R": 108.093, "timestamp": 1601924450.9315426},
+                     "Channel_02": {"T": 293.701, "R": 30.7398, "timestamp": 1601924466.6130798},
+                    }
+                }
+
+        """
+        pm = Pacemaker(2, quantize=True) # OCS pacemaker set to check for new data at 2 Hz
+
+        with self._acq_proc_lock.acquire_timeout(timeout=0, job='acq') \
+                as acq_acquired, \
+                self._lock.acquire_timeout(job='acq') as acquired:
+            if not acq_acquired:
+                self.log.warn(f"Could not start Process because "
+                              f"{self._acq_proc_lock.job} is already running")
+                return False, "Could not acquire lock"
+
+            session.set_status('running')
+            self.log.info("Starting data acquisition for {}".format(self.agent.agent_address))
+            previous_timestamp = None
+            last_release = time.time()
+
+            session.data = {"fields": {}}
+
+            self.take_data = True
+            while self.take_data:
+                pm.sleep()
+
+                # Relinquish sampling lock occasionally.
+                if time.time() - last_release > 1.:
+                    last_release = time.time()
+                    if not self._lock.release_and_acquire(timeout=10):
+                        self.log.warn(f"Failed to re-acquire sampling lock, "
+                                      f"currently held by {self._lock.job}.")
+                        continue
+
+                current_measurement = self.module.get_latest_measurement()
+                current_timestamp = current_measurement['timestamp']
+                current_ch_num = current_measurement['channel_nr']
+                channel_str = f'Channel_{current_ch_num:02}'
+
+                # The BFTC reports a timestamp of the most recent measurement
+                # when we query it - we only save the new data point when the
+                # timestamp changes.
+                if previous_timestamp != current_timestamp:
+                # Potential upgrade: implement checks of channel wait_time
+                # and meas_time to ensure we aren't missing data
+                    
+                    # Record most recent data
+                    # Temperature data returns None if no curve or out of range
+                    # Will set to zero to match LS372 behavior for now
+                    temp_reading = current_measurement['temperature'] # in K
+                    if temp_reading == None:
+                        temp_reading = 0.0
+                    res_reading = current_measurement['resistance'] # in Ohms
+                        
+                    # Update timestamp
+                    previous_timestamp = current_timestamp
+                        
+                    current_time = time.time() # Using time.time() to be consistent with other agents
+                    data = {
+                        'timestamp': current_time,
+                        'block_name': channel_str,
+                        'data': {}
+                    }
+                    
+                    # For data feed
+                    data['data'][channel_str + '_T'] = temp_reading
+                    data['data'][channel_str + '_R'] = res_reading
+                    session.app.publish_to_feed('temperatures', data)
+                    self.log.debug("{data}", data=session.data)
+                
+                    # For session.data
+                    field_dict = {channel_str: {"T": temp_reading,
+                                                "R": res_reading,
+                                                "timestamp": current_time}}
+                    session.data['fields'].update(field_dict)                
+
+        return True, 'Acquisition exited cleanly.'                            
 
     def _stop_acq(self, session, params=None):
         """
@@ -178,6 +272,7 @@ class Bluefors_TC_Agent:
             return True, 'requested to stop taking data.'
         else:
             return False, 'acq is not currently running'
+
 
 def make_parser(parser=None):
     """Build the argument parser for the Agent. Allows sphinx to automatically
@@ -217,7 +312,8 @@ def main(args=None):
         init_params = {'auto_acquire': False,
                        'acq_params': {}}
     elif args.mode == 'acq':
-        init_params = {'auto_acquire': True}
+        init_params = {'auto_acquire': True,
+                       'acq_params': {}}
 
     # Interpret options in the context of site_config.
     print('I am in charge of device with serial number: %s' % args.serial_number)

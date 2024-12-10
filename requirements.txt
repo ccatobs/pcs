@@ -1,0 +1,22 @@
+# core dependencies
+autobahn[serialization]
+ocs
+sqlalchemy>=1.4
+twisted
+
+# hardware communication
+pyserial
+requests
+
+# common dependencies
+numpy
+
+# Docs
+# see docs/requirements.txt once it is live!
+
+# testing + development
+setuptools-scm
+# -r requiements/testing.txt - once testing is up!
+
+# Contributing
+pre-commit

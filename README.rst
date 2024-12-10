@@ -11,7 +11,8 @@ The Prime-Cam Control System (`PCS`_) contains agents for use with the Simons Ob
 
 Installation
 ------------
-Currently must install from GitHub directly via ```git clone```
+Currently must install from GitHub directly via ```git clone```. 
+Once the repo is cloned, you can pip install it from within the top level of the repo (e.g. ```pip install .```). This will enable PCS agents to be discoverable by SO's OCS for client scripts.
 
 Docker Images
 -------------

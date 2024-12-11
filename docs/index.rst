@@ -34,7 +34,7 @@ Section                          Description
    :maxdepth: 2
    :caption: Agent Reference
 
-   agents/bftc_agent
+   agents/bluefors_tc
    agents/lakeshore325
 
 

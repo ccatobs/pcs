@@ -1,23 +1,23 @@
 .. highlight:: rst
 
-.. _lakeshore325:
+.. _bluefors_tc:
 
 =============
-Lakeshore 325
+Bluefors Temperature Controller
 =============
 
 .. todo::
-    Describe the Lakeshore 325
+    Describe the Bluefors Temperature Controller
 
 .. argparse::
-    :filename: ../pcs/agents/lakeshore325/agent.py
+    :filename: ../pcs/agents/bluefors_tc/agent.py
     :func: make_parser
     :prog: python3 agent.py
 
 Dependencies
 ------------
 .. todo::
-    Any dependencies?
+    Any dependencies or special set up?
 
 Configuration File Examples
 ---------------------------
@@ -43,7 +43,7 @@ Direct Communication with Driver Code
 Agent API
 ---------
 
-.. autoclass:: pcs.agents.lakeshore325.agent.LS325_Agent
+.. autoclass:: pcs.agents.bluefors_tc.agent.Bluefors_TC_Agent
     :members:
 
 .. todo::

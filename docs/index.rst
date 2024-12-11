@@ -27,14 +27,14 @@ Section                          Description
    :maxdepth: 2
    :caption: User Guide
 
-    user/intro
-    user/installation
+   user/intro
+   user/installation
 
 .. toctree::
-    :maxdepth: 2
-    :caption: Agent Reference
+   :maxdepth: 2
+   :caption: Agent Reference
 
-    agents/bftc_agent
-    agents/lakeshore325
+   agents/bftc_agent
+   agents/lakeshore325
 
 

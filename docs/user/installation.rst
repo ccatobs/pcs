@@ -27,7 +27,7 @@ To install from source, clone the respository and install with pip::
     flag when running `setup.py`.
 
 Getting Started
-============
+===============
 
 Configuration Files
 -------------------

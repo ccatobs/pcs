@@ -15,13 +15,13 @@ For information about general OCS components, see the `OCS Documentation
 Contents
 ========
 
-===============================  ============================================================
-Section                          Description
-===============================  ============================================================
-:ref:`User Guide <user>`           Start here for information about the design and use of PCS.
-:ref:`Agent Reference <agents>`    Details on configuration and use of the OCS Agents
-                                   provided by PCS.
-===============================  ============================================================
+===================  ============================================================
+Section              Description
+===================  ============================================================
+User Guide             Start here for information about the design and use of PCS.
+Agent Reference        Details on configuration and use of the OCS Agents
+                       provided by PCS.
+===================  ============================================================
 
 .. toctree::
    :maxdepth: 2

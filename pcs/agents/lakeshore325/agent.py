@@ -6,7 +6,7 @@ from ocs import ocs_agent, site_config
 from ocs.ocs_twisted import Pacemaker, TimeoutLock
 from twisted.internet import reactor
 
-from pcs.drivers.lakeshore325 import lk
+from pcs.drivers.lakeshore325 import LS325
 
 class LS325_Agent:
     """Agent to connect to a single Bluefors Temperature Controller device.
@@ -57,7 +57,7 @@ class LS325_Agent:
         session.set_status('running')
         
         try:
-            self.module = lk.LS325(self.port)
+            self.module = LS325(self.port)
         except ConnectionError:
             self.log.error("Could not connect to the LS325. Exiting.")
             reactor.callFromThread(reactor.stop)

@@ -2,9 +2,9 @@
 
 .. _bluefors_tc:
 
-=============
+===============================
 Bluefors Temperature Controller
-=============
+===============================
 
 .. todo::
     Describe the Bluefors Temperature Controller

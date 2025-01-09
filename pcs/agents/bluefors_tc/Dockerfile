@@ -1,19 +1,21 @@
-# bftc-docker
-# A container setup with an installation of the bftc agent
-
-# Use the ocs image as a base
 FROM simonsobs/ocs:v0.10.4
 
-# Copy in and install requirements
-COPY requirements.txt /app/bluefors_tc/requirements.txt
-WORKDIR /app/bluefors_tc/
+# Set working directory
+WORKDIR /app/bftc/
+
+# Copy in local project files
+COPY . .
+
+# Install additional Python dependencies
 RUN pip3 install -r requirements.txt
-
-# Copy the current directory contents into the container at /app
-COPY . /app/bluefors_tc/
-
-# Reset workdir to avoid local imports
-WORKDIR /
-
+RUN git clone http://github.com/ccatobs/pcs && \
+    cd /app/bftc/pcs && \
+    pip install . && \
+    cd .. && \
+    rm -r pcs
+    
 # Run agent on container startup
-ENTRYPOINT ["dumb-init", "ocs-agent-cli"]
+ENTRYPOINT ["dumb-init", "ocs-agent-cli","--agent", "agent.py","--entrypoint","main","--instance-id","bluefors"]
+
+# Replace ENTRYPOINT to avoid running agent.py (good debugging tool)
+#ENTRYPOINT ["tail", "-f", "/dev/null"]

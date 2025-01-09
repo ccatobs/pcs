@@ -30,7 +30,7 @@ class LS325:
 
         
         
-        self.com = serial.Serial(self.port, self.baudrate, self._bytesize, self._parity, self._stopbits, self.timeout)
+        self.com = serial.Serial(self.port, self.baudrate, self._bytesize, 		self._parity, self._stopbits, self.timeout)
         
  
         
@@ -92,7 +92,10 @@ class LS325:
     def get_id(self):
         """Get the ID number of the Lakeshore unit."""
         return self.msg('*IDN?')
-        
+
+    def get_sensor_resistance(self):
+        return self.msg('SRDG? A')
+ 
 class Heater:
     """Heater class for LS370 control
 

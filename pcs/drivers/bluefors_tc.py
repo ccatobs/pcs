@@ -105,7 +105,7 @@ class BFTC:
 
 class Channel:
     """
-        Class for thermometer channels on the BFTC.
+        Class for thermometer channels on the BFTC.s[
 
         Attributes:
             bftc (obj) - BFTC object with which this Channel is associated
@@ -119,6 +119,7 @@ class Channel:
         self.bftc = bftc
         self.channel_num = channel_num
         self.cal_curve_num = self.get_cal_curve_number()
+        self.name = self.get_name()
 
     def get_state(self):
         """
@@ -245,6 +246,12 @@ class Channel:
 
     def set_cal_curve_number(self,cal_curve_num):
         pass
+    
+    def get_name(self):
+    
+        message = {'channel_nr': self.channel_num}
+        
+        return self.bftc.msg('/channel', message)['name']
 
 class Heater:
     """

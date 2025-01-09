@@ -1,5 +1,7 @@
 import argparse
 import threading
+import txaio
+import os
 from contextlib import contextmanager
 
 from ocs import ocs_agent, site_config
@@ -98,7 +100,7 @@ def make_parser(parser=None):
     # Add options specific to this agent.
     pgroup = parser.add_argument_group('Agent Options')
     pgroup.add_argument('--port')
-    pgroup.add_argument('--serial_number')
+    pgroup.add_argument('--serial-number')
 
     return parser
 

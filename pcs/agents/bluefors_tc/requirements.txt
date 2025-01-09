@@ -1,5 +1,3 @@
 ocs
 twisted
-
 requests
-json

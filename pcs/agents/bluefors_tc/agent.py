@@ -275,6 +275,42 @@ class Bluefors_TC_Agent:
             return True, 'requested to stop taking data.'
         else:
             return False, 'acq is not currently running'
+            
+            
+    @ocs_agent.param('heater', type=str, choices=['sample', 'still'])
+    @ocs_agent.param('output', type=float)        
+    def set_power(self, session, params=None):
+        """
+           Sets the current applied manual heater power in Watts (float).
+
+           Parameters:
+               power (float) - the manual power in W that the heater should be
+                               set to use - needs to be a float between
+                               0.0 and 1.0
+        """
+        with self._lock.acquire_timeout(job='set_heater_output') as acquired:
+            if not acquired:
+                self.log.warn(f"Could not start Task because "
+                              f"{self._lock.job} is already running")
+                return False, "Could not acquire lock"
+
+            heater = params['heater'].lower()
+            output = params['output']
+            
+            
+            if heater == 'still':
+                self.module.still_heater.set_power(output)
+            if heater == 'sample':
+                self.module.mxc_heater.set_power(output)
+                
+                
+            data = {'timestamp': time.time(),
+                    'block_name': heater,
+                    'data': {'{}_heater_out'.format(heater): output}
+                    }
+            session.app.publish_to_feed('temperatures', data)
+            
+        return True, "Set {} output to {}".format(heater, output)
 
 
 def make_parser(parser=None):
@@ -327,6 +363,7 @@ def main(args=None):
 
     agent.register_task('init_bftc', bftc_agent.init_bftc,
                         startup=init_params)
+    agent.register_task('set_power', bftc_agent.set_power, startup=init_params)
     agent.register_process('acq', bftc_agent.acq, bftc_agent._stop_acq)
     # And many more to come...
 

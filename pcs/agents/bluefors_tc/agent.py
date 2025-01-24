@@ -158,7 +158,8 @@ class Bluefors_TC_Agent:
             print("Initialized BF TC module: {!s}".format(self.module))
             session.add_message("BF TC initilized with ID: %s" % self.module.id)
 
-            self.thermometers = [channel.name for channel in self.module.channels]
+            self.thermometers = ["BF_{}".format(channel.name) for channel in self.module.channels]
+            
             
             self.initialized = True
 

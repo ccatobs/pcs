@@ -158,7 +158,7 @@ class Bluefors_TC_Agent:
             print("Initialized BF TC module: {!s}".format(self.module))
             session.add_message("BF TC initilized with ID: %s" % self.module.id)
 
-            #self.thermometers = [channel.name for channel in self.module.channels]
+            self.thermometers = [channel.name for channel in self.module.channels]
             
             self.initialized = True
 
@@ -224,7 +224,8 @@ class Bluefors_TC_Agent:
                 current_measurement = self.module.get_latest_measurement()
                 current_timestamp = current_measurement['timestamp']
                 current_ch_num = current_measurement['channel_nr']
-                channel_str = f'Channel_{current_ch_num:02}'
+                current_ch_name = self.thermometers[current_ch_num]
+                channel_str = str(current_ch_name)
 
                 # The BFTC reports a timestamp of the most recent measurement
                 # when we query it - we only save the new data point when the
@@ -279,7 +280,7 @@ class Bluefors_TC_Agent:
             
     @ocs_agent.param('heater', type=str, choices=['sample', 'still'])
     @ocs_agent.param('output', type=float)        
-    def set_power(self, session, params=None):
+    def set_heater_power(self, session, params=None):
         """
            Sets the current applied manual heater power in Watts (float).
 
@@ -312,7 +313,47 @@ class Bluefors_TC_Agent:
             
         return True, "Set {} output to {}".format(heater, output)
 
+    @ocs_agent.param('heater', type=str, choices=['sample', 'still'])
+    @ocs_agent.param('state', type=str, choices=['on', 'off'])        
+    def heater_switch(self, session, params=None):
+        """
+           Sets the current applied manual heater power in Watts (float).
 
+           Parameters:
+               power (float) - the manual power in W that the heater should be
+                               set to use - needs to be a float between
+                               0.0 and 1.0
+        """
+        with self._lock.acquire_timeout(job='set_heater_output') as acquired:
+            if not acquired:
+                self.log.warn(f"Could not start Task because "
+                              f"{self._lock.job} is already running")
+                return False, "Could not acquire lock"
+
+            heater = params['heater'].lower()
+            state = params['state'].lower()
+            
+            
+            if heater == 'still':
+                if state == 'on':
+                    self.module.still_heater.enable_heater()
+                if state == 'off':
+                    self.module.still_heater.disable_heater() 
+            if heater == 'sample':
+                if state == 'on':
+                    self.module.sample_heater.enable_heater()
+                if state == 'off':
+                    self.module.sample_heater.disable_heater()
+            
+            data = {'timestamp': time.time(),
+                    'block_name': heater,
+                    'data': {'{}_heater_state'.format(heater): state}
+                    }
+            session.app.publish_to_feed('temperatures', data)
+            
+            
+        return True, "{} heater is {}".format(heater, state)
+        
 def make_parser(parser=None):
     """Build the argument parser for the Agent. Allows sphinx to automatically
     build documentation based on this function.
@@ -363,7 +404,8 @@ def main(args=None):
 
     agent.register_task('init_bftc', bftc_agent.init_bftc,
                         startup=init_params)
-    agent.register_task('set_power', bftc_agent.set_power, startup=init_params)
+    agent.register_task('set_heater_power', bftc_agent.set_heater_power, startup=init_params)
+    agent.register_task('heater_switch', bftc_agent.heater_switch, startup=init_params)
     agent.register_process('acq', bftc_agent.acq, bftc_agent._stop_acq)
     # And many more to come...
 

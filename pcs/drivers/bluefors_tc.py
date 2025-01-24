@@ -250,8 +250,9 @@ class Channel:
     def get_name(self):
     
         message = {'channel_nr': self.channel_num}
+        name = self.bftc.msg('/channel', message)['name']
         
-        return self.bftc.msg('/channel', message)['name']
+        return name.replace('-','_')
 
 class Heater:
     """

@@ -303,7 +303,7 @@ class Bluefors_TC_Agent:
             if heater == 'still':
                 self.module.still_heater.set_power(output)
             if heater == 'sample':
-                self.module.mxc_heater.set_power(output)
+                self.module.sample_heater.set_power(output)
                 
                 
             data = {'timestamp': time.time(),

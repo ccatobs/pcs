@@ -14,7 +14,7 @@ class BFTC:
             http_root (str) - beginning of the path for any HTTP command for this device
             channels (list) - list of channel objects, index+1 corresponds to channel number
             still_heater (obj) - Heater class object for the still heater
-            mxc_heater (obj) - Heater class object for the MXC heater
+            sample_heater (obj) - Heater class object for the MXC heater
 
     """
 
@@ -31,7 +31,7 @@ class BFTC:
             self.channels.append(c)
         # The BFTC supports four heaters, but heaters 1 and 2 are heat switches
         self.still_heater = Heater(self,3)
-        self.mxc_heater = Heater(self,4)
+        self.sample_heater = Heater(self,4)
         self.id = self.get_serial()
 
 

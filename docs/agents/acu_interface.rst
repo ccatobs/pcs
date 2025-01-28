@@ -35,7 +35,7 @@ OCS Site Config
 To configure the ACU Agent we need to add a block to the ocs configuration
 file. An example configuration block using all availabile arguments is below::
 
-{'agent-class': 'ACUAgent',
+ {'agent-class': 'ACUAgent',
        'instance-id': 'acu',
        'arguments': [['--acu-config', 'acu_config.yaml'],
                         ['--device', 'acu-sim']]}

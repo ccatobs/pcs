@@ -1,6 +1,5 @@
 import sys
 import time
-
 import numpy as np
 import serial
 
@@ -12,7 +11,7 @@ units_lock = {'kelvin': '1',
 
 class LS325:
     """
-        Lakeshore 370 class.
+        Lakeshore 325 class.
 
     Attributes:
         channels - list of channels, index corresponds to channel number with
@@ -23,25 +22,16 @@ class LS325:
     _parity = serial.PARITY_ODD
     _stopbits = serial.STOPBITS_ONE
 
-    def __init__(self, port, baudrate=9600, timeout=10, num_channels=16): #325 only has two input channels 'A' and 'B'
+    def __init__(self, port, baudrate=9600, timeout=10): #325 only has two input channels 'A' and 'B'
         self.port = port
         self.baudrate = baudrate
         self.timeout = timeout
-
-        
-        
-        self.com = serial.Serial(self.port, self.baudrate, self._bytesize, 		self._parity, self._stopbits, self.timeout)
-        
- 
-        
-        
-        
-        
-        self.num_channels = num_channels
-
+        self.com = serial.Serial(self.port, self.baudrate, self._bytesize, 	self._parity, self._stopbits, self.timeout)
         self.id = self.get_id()
-        self.heater1 = Heater(self)
-        
+        self.channel_A = Channel(self, 'A')
+        self.channel_B = Channel(self, 'B')
+        self.heater_1 = Heater(self, 1)
+        self.heater_2 = Heater(self, 2)
         
 
     def msg(self, message):
@@ -92,10 +82,26 @@ class LS325:
     def get_id(self):
         """Get the ID number of the Lakeshore unit."""
         return self.msg('*IDN?')
+        
+        
+class Channel:
 
-    def get_sensor_resistance(self):
-        return self.msg('SRDG? A')
- 
+    def __init__(self, ls, channel_id):
+        self.ls = ls
+        self.id = channel_id
+        self.sensor_type = _get_input_type()
+        
+    def _get_input_type(self):
+        """Get the current sensor type set to the channel"""
+        return self.msg('INTYPE? {}'.format(self.id))
+        
+    def get_resistance(self):
+        return self.msg('SRDG? {}'.format(self.id))
+        
+        
+        
+        
+
 class Heater:
     """Heater class for LS370 control
 

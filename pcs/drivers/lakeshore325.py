@@ -88,15 +88,34 @@ class Channel:
 
     def __init__(self, ls, channel_id):
         self.ls = ls
-        self.id = channel_id
-        self.sensor_type = _get_input_type()
+        self.name = channel_name
+        self.sensor_type = self._get_input_type()#INTYPE
+
+        #self.celsius_reading = get_celsius_reading() #CRDG? Celsius Reading Query
+        #self.resistance_reading = get_resistance() #SRDG? Sensor Units Input Reading Query 
+
+        #CSET?
+        #TLIMIT Temperature Limit Command  
+        #FILTER? 
+        #INCRV 
         
     def _get_input_type(self):
         """Get the current sensor type set to the channel"""
-        return self.msg('INTYPE? {}'.format(self.id))
+        return self.msg('INTYPE? {}'.format(self.name))
         
     def get_resistance(self):
-        return self.msg('SRDG? {}'.format(self.id))
+        "returns resistance of channel"
+        return self.msg(F'SRDG? {self.name}')
+"""
+    def get_celsius_reading(self):
+        "returns temp in celsius" #CRDG? Celsius Reading Query
+        return self.msg(F'CRDG? {self.name}')
+        
+    def get_kelvin_reading(self):
+        #KRDG? Kelvin Reading Query
+        return self.msg(F'KRDG? {self.name}')
+"""
+    #RDGST  
         
         
         
@@ -109,9 +128,9 @@ class Heater:
     :type ls: Lakeshore370.LS370
     """
 
-    def __init__(self, ls):
+    def __init__(self, ls, heater_id):
         self.ls = ls
-
+        self.id = heater_id
         self.mode = None
         self.input = None
         self.powerup = None 

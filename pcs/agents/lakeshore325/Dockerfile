@@ -8,7 +8,7 @@ COPY . .
 
 # Install additional Python dependencies
 RUN pip3 install -r requirements.txt
-RUN git clone http://github.com/ccatobs/pcs && \
+RUN git clone -b bftc_updates http://github.com/ccatobs/pcs && \
     cd /app/lakeshore325/pcs && \
     pip install . && \
     cd .. && \

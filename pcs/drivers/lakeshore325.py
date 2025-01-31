@@ -101,11 +101,11 @@ class Channel:
         
     def _get_input_type(self):
         """Get the current sensor type set to the channel"""
-        return self.msg('INTYPE? {}'.format(self.name))
+        return self.ls.msg('INTYPE? {}'.format(self.name))
         
     def get_resistance(self):
         "returns resistance of channel"
-        return self.msg(F'SRDG? {self.name}')
+        return self.ls.msg(F'SRDG? {self.name}')
 """
     def get_celsius_reading(self):
         "returns temp in celsius" #CRDG? Celsius Reading Query

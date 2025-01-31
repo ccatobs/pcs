@@ -86,7 +86,7 @@ class LS325:
         
 class Channel:
 
-    def __init__(self, ls, channel_id):
+    def __init__(self, ls, channel_name):
         self.ls = ls
         self.name = channel_name
         self.sensor_type = self._get_input_type()#INTYPE

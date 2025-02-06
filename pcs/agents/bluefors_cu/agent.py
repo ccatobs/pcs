@@ -224,10 +224,10 @@ class Bluefors_CU_Agent:
                         continue
                 
                 for i in range(1,6):
-                    pressure, time = self.module.get_pressure(i)
+                    pressure, timestamp = self.module.get_pressure(i)
                     channel_str = 'p' + str(i)
                     data = {
-                        'timestamp': time,
+                        'timestamp': timestamp,
                         'block_name': channel_str,
                         'data': {}
                     }
@@ -235,13 +235,13 @@ class Bluefors_CU_Agent:
                     session.app.publish_to_feed('pressures', data)
                     self.log.debug("{data}", data=session.data)
                     field_dict = {channel_str: {"pressure": pressure,
-                                                "timestamp": time}}
+                                                "timestamp": timestamp}}
                     session.data['fields'].update(field_dict)
                     
-                flow, time = self.module.get_flow()
+                flow, timestamp = self.module.get_flow()
                 channel_str = 'flow_rate'
                 data = {
-                   'timestamp': time,
+                   'timestamp': timestamp,
                     'block_name': channel_str,
                     'data': {}
                     }
@@ -251,7 +251,7 @@ class Bluefors_CU_Agent:
                     
                 # For session.data
                 field_dict = {channel_str: {"value": flow,
-                                                "timestamp": time}}
+                                                "timestamp": timestamp}}
                 session.data['fields'].update(field_dict)                
 
         return True, 'Acquisition exited cleanly.'                            

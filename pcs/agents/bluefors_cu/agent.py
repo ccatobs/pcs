@@ -147,15 +147,15 @@ class Bluefors_CU_Agent:
             session.set_status('running')
             
             try:
-                self.module = BFCU(self.ip)
+                self.module = BFCU(self.ip, self.api_key)
             except ConnectionError:
                 self.log.error("Could not connect to the BF CU. Exiting.")
                 reactor.callFromThread(reactor.stop)
-                return False, 'BF TC initialization failed'
+                return False, 'BF CU initialization failed'
             except Exception as e:
                 self.log.error(f"Unhandled exception encountered: {e}")
                 reactor.callFromThread(reactor.stop)
-                return False, 'BF TC initialization failed'
+                return False, 'BF CU initialization failed'
 
             print("Initialized BF CU module: {!s}".format(self.module))
             session.add_message("BF CU initilized")

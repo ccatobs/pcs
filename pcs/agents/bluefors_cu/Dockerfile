@@ -9,7 +9,7 @@ COPY . .
 # Install additional Python dependencies
 RUN pip3 install -r requirements.txt
 RUN git clone -b bftc_updates http://github.com/ccatobs/pcs && \
-    cd /app/bftc/pcs && \
+    cd /app/bfcu/pcs && \
     pip install . && \
     cd .. && \
     rm -r pcs

@@ -187,7 +187,10 @@ class LS325_Agent:
                     
                 session.app.publish_to_feed('resistances', data)
                 self.log.debug("{data}", data=session.data)
-                
+                # For session.data
+                field_dict = {channel_str: {"R": res_reading,
+                                            "timestamp": current_time_A}}
+                session.data['fields'].update(field_dict)
              
                 time.sleep(.1)
                 
@@ -206,7 +209,10 @@ class LS325_Agent:
                     
                 session.app.publish_to_feed('resistances', data)
                 self.log.debug("{data}", data=session.data)
-                
+                # For session.data
+                field_dict = {channel_str: {"R": res_reading,
+                                            "timestamp": current_time_B}}
+                session.data['fields'].update(field_dict)
                 
                 time.sleep(10)
                 

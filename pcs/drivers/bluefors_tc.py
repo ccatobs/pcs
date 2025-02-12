@@ -118,7 +118,7 @@ class Channel:
     def __init__(self,bftc,channel_num):
         self.bftc = bftc
         self.channel_num = channel_num
-        self.cal_curve_num = self.get_cal_curve_number()
+        #self.cal_curve_num = self.get_cal_curve_number()
         self.name = self.get_name()
 
     def get_state(self):

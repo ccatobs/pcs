@@ -94,7 +94,7 @@ class Channel:
         #self.celsius_reading = get_celsius_reading() #CRDG? Celsius Reading Query
         #self.resistance_reading = get_resistance() #SRDG? Sensor Units Input Reading Query 
 
-        #CSET?
+        #CSET? get units
         #TLIMIT Temperature Limit Command  
         #FILTER? 
         #INCRV 
@@ -106,15 +106,36 @@ class Channel:
     def get_resistance(self):
         "returns resistance of channel"
         return self.ls.msg(F'SRDG? {self.name}')
-"""
+
     def get_celsius_reading(self):
         "returns temp in celsius" #CRDG? Celsius Reading Query
-        return self.msg(F'CRDG? {self.name}')
+        return self.ls.msg(F'CRDG? {self.name}')
         
     def get_kelvin_reading(self):
         #KRDG? Kelvin Reading Query
-        return self.msg(F'KRDG? {self.name}')
-"""
+        return self.ls.msg(F'KRDG? {self.name}')
+
+    def set_temp_limit(self, templim):
+        #Temperature Limit Command  
+        return self.ls.msg(F'TLIMIT {self.name} {templim}')
+
+    def get_temp_limit(self):
+        #Temperature Limit Query  
+        return self.ls.msg(F'TLIMIT {self.name}')
+
+    def get_filter_readings(self):
+        #FILTER? Input Filter Parameter Query 
+        return self.ls.msg(F'FILTER? {self.name}')
+
+    def def_curve_num(self):
+        #Input Curve Number Command 
+        return self.ls.msg(F'INCRV {self.name}')
+
+    def def_curve_num(self):   
+        #Input Curve Number Query 
+        return self.ls.msg(F'INCRV? {self.name}')
+
+
     #RDGST  
         
         

@@ -97,7 +97,7 @@ class LS325_Agent:
             'frame_length': 10 * 60  # [sec]
         }
         
-        self.agent.register_feed('temperatures',
+        self.agent.register_feed('resistances',
                                  record=True,
                                  agg_params=agg_params,
                                  buffer_time=1)
@@ -170,28 +170,46 @@ class LS325_Agent:
                         self.log.warn(f"Failed to re-acquire sampling lock, "
                                       f"currently held by {self._lock.job}.")
                         continue
-                        
-                current_time = time.time()
-                res_reading = self.module.channel_A.get_resistance()        
+                
+                
+                res_reading = self.module.channel_A.get_resistance() 
+                current_time_A = time.time()
                 channel_str = 'Channel_A'
                 
                 # Setup feed dictionary
                 data = {
-                    'timestamp': current_time,
+                    'timestamp': current_time_A,
                     'block_name': channel_str,
                     'data': {}
                 }
 
                 data['data'][channel_str + '_R'] = res_reading
                     
-                session.app.publish_to_feed('temperatures', data)
+                session.app.publish_to_feed('resistances', data)
                 self.log.debug("{data}", data=session.data)
                 
-                # For session.data
-                field_dict = {channel_str: {"R": res_reading,
-                                            "timestamp": current_time}}
-                session.data['fields'].update(field_dict)                
+             
+                time.sleep(.1)
+                
+                res_reading = self.module.channel_B.get_resistance()
+                current_time_B = time.time()
+                channel_str = 'Channel_B'
+                
+                # Setup feed dictionary
+                data = {
+                    'timestamp': current_time_B,
+                    'block_name': channel_str,
+                    'data': {}
+                }
 
+                data['data'][channel_str + '_R'] = res_reading
+                    
+                session.app.publish_to_feed('resistances', data)
+                self.log.debug("{data}", data=session.data)
+                
+                
+                time.sleep(10)
+                
         return True, 'Acquisition exited cleanly.'                 
     
     def _stop_acq(self, session, params=None):
@@ -214,9 +232,62 @@ class LS325_Agent:
     def get_heater_units(self, session, params=None):
         resp = self.module.heater1.get_units()
         return True, resp
-        
     
+    #paul added:
+    @ocs_agent.param('_')    
+    def get_one_measurement_A(self, session, params=None):
     
+        session.data = {"fields": {}}
+        res_reading = float(self.module.channel_A.get_resistance())
+        current_time_A = time.time()
+        channel_str = 'Channel_A'
+                
+        # Setup feed dictionary
+        data = {'timestamp': current_time_A,
+                'block_name': channel_str,
+                'data': {}
+                }
+
+        data['data'][channel_str + '_R'] = res_reading
+                    
+        session.app.publish_to_feed('resistances', data)
+        self.log.debug("{data}", data=session.data)
+                
+        # For session.data
+        field_dict = {channel_str: {"R": res_reading,
+                                    "timestamp": current_time_A}}
+        session.data['fields'].update(field_dict)
+               
+        return True, res_reading
+   
+    #paul added:
+    @ocs_agent.param('_')    
+    def get_one_measurement_B(self, session, params=None):
+    
+        session.data = {"fields": {}}
+        res_reading = float(self.module.channel_B.get_resistance())
+        current_time_B = time.time()
+        channel_str = 'Channel_B'
+                
+        # Setup feed dictionary
+        data = {'timestamp': current_time_B,
+                'block_name': channel_str,
+                'data': {}
+                }
+
+        data['data'][channel_str + '_R'] = res_reading
+                    
+        session.app.publish_to_feed('resistances', data)
+        self.log.debug("{data}", data=session.data)
+                
+        # For session.data
+        field_dict = {channel_str: {"R": res_reading,
+                                    "timestamp": current_time_B}}
+        session.data['fields'].update(field_dict)
+               
+        return True, res_reading
+   
+
 
 def make_parser(parser=None):
     """Build the argument parser for the Agent. Allows sphinx to automatically
@@ -259,6 +330,9 @@ def main(args=None):
     agent.register_task('init_ls325', ls325_agent.init_ls325)
     agent.register_task('get_heater_units', ls325_agent.get_heater_units)
     agent.register_task('set_heater_units', ls325_agent.set_heater_units)
+    #register task with get_one_measurement
+    agent.register_task('get_one_measurement_A', ls325_agent.get_one_measurement_A)
+    agent.register_task('get_one_measurement_B', ls325_agent.get_one_measurement_B)
     # And many more to come...
 
     runner.run(agent, auto_reconnect=True)

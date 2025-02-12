@@ -157,8 +157,6 @@ class Bluefors_TC_Agent:
 
             print("Initialized BF TC module: {!s}".format(self.module))
             session.add_message("BF TC initilized with ID: %s" % self.module.id)
-
-            self.thermometers = ["BF_{}".format(channel.name) for channel in self.module.channels]
             
             
             self.initialized = True
@@ -225,8 +223,7 @@ class Bluefors_TC_Agent:
                 current_measurement = self.module.get_latest_measurement()
                 current_timestamp = current_measurement['timestamp']
                 current_ch_num = current_measurement['channel_nr']
-                current_ch_name = self.thermometers[current_ch_num]
-                channel_str = str(current_ch_name)
+                channel_str = 'Channel_' + str(current_ch_num)
 
                 # The BFTC reports a timestamp of the most recent measurement
                 # when we query it - we only save the new data point when the
@@ -354,7 +351,7 @@ class Bluefors_TC_Agent:
             
             
         return True, "{} heater is {}".format(heater, state)
-        
+    
 def make_parser(parser=None):
     """Build the argument parser for the Agent. Allows sphinx to automatically
     build documentation based on this function.
@@ -383,7 +380,7 @@ def main(args=None):
     txaio.start_logging(level=os.environ.get("LOGLEVEL", "info"))
 
     parser = make_parser()
-    args = site_config.parse_args(agent_class='BFTCAgent',
+    args = site_config.parse_args(agent_class='Bluefors_TC_Agent',
                                   parser=parser,
                                   args=args)
 

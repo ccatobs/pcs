@@ -173,7 +173,8 @@ class LS325_Agent:
             self.take_data = True
             
             while self.take_data:
-                res_reading = float(self.module.channel_A.get_resistance())
+                res_reading = self.module.channel_A.get_resistance()
+                res_reading_str = str(res_reading)
                 current_time_A = time.time()
                 channel_str = 'Channel_A'
                 
@@ -184,19 +185,20 @@ class LS325_Agent:
                     'data': {}
                 }
 
-                data['data'][channel_str + '_R'] = res_reading
+                data['data'][channel_str + '_R'] = res_reading_str
                     
                 session.app.publish_to_feed('resistances', data)
                 self.log.debug("{data}", data=session.data)
                 
                 # For session.data
-                field_dict = {channel_str: {"R": res_reading,
+                field_dict = {channel_str: {"R": res_reading_str,
                                             "timestamp": current_time_A}}
                 session.data['fields'].update(field_dict)
              
                 time.sleep(.1)
                 
-                res_reading = float(self.module.channel_B.get_resistance())
+                res_reading = self.module.channel_B.get_resistance()
+                res_reading_str = str(res_reading)
                 current_time_B = time.time()
                 channel_str = 'Channel_B'
                 
@@ -207,13 +209,13 @@ class LS325_Agent:
                     'data': {}
                 }
 
-                data['data'][channel_str + '_R'] = res_reading
+                data['data'][channel_str + '_R'] = res_reading_str
                     
                 session.app.publish_to_feed('resistances', data)
                 self.log.debug("{data}", data=session.data)
                 
                 # For session.data
-                field_dict = {channel_str: {"R": res_reading,
+                field_dict = {channel_str: {"R": res_reading_str,
                                             "timestamp": current_time_B}}
                 session.data['fields'].update(field_dict)
                 

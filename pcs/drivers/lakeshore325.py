@@ -105,7 +105,7 @@ class Channel:
         
     def get_resistance(self):
         "returns resistance of channel"
-        return self.ls.msg(F'SRDG? {self.name}')
+        return float(self.ls.msg(F'SRDG? {self.name}'))
 
     def get_celsius_reading(self):
         "returns temp in celsius" #CRDG? Celsius Reading Query

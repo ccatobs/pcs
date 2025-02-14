@@ -121,6 +121,14 @@ class LS325_Agent:
             self.log.info("LS325 already initialized. Returning...")
             return True, "Already initialized"
             
+        with self._lock.acquire_timeout(job='init') as acquired1, \
+                self._acq_proc_lock.acquire_timeout(timeout=0., job='init') \
+                as acquired2:
+            if not acquired1:
+                self.log.warn(f"Could not start init because "
+                              f"{self._lock.job} is already running")
+                return False, "Could not acquire lock"  
+                  
         session.set_status('running')
         
         try:
@@ -139,6 +147,8 @@ class LS325_Agent:
 
         self.initialized = True
 
+        if params.get('auto_acquire', False):
+            self.agent.start('acq', params.get('acq_params', None))
 
         return True, 'LS325 initialized.'
         
@@ -161,17 +171,8 @@ class LS325_Agent:
             session.data = {"fields": {}}
 
             self.take_data = True
+            
             while self.take_data:
-   
-                # Relinquish sampling lock occasionally.
-                if time.time() - last_release > 1.:
-                    last_release = time.time()
-                    if not self._lock.release_and_acquire(timeout=10):
-                        self.log.warn(f"Failed to re-acquire sampling lock, "
-                                      f"currently held by {self._lock.job}.")
-                        continue
-                
-                
                 res_reading = self.module.channel_A.get_resistance() 
                 current_time_A = time.time()
                 channel_str = 'Channel_A'
@@ -214,7 +215,7 @@ class LS325_Agent:
                                             "timestamp": current_time_B}}
                 session.data['fields'].update(field_dict)
                 
-                time.sleep(10)
+                time.sleep(2)
                 
         return True, 'Acquisition exited cleanly.'                 
     
@@ -239,62 +240,7 @@ class LS325_Agent:
         resp = self.module.heater1.get_units()
         return True, resp
     
-    #paul added:
-    @ocs_agent.param('_')    
-    def get_one_measurement_A(self, session, params=None):
     
-        session.data = {"fields": {}}
-        res_reading = float(self.module.channel_A.get_resistance())
-        current_time_A = time.time()
-        channel_str = 'Channel_A'
-                
-        # Setup feed dictionary
-        data = {'timestamp': current_time_A,
-                'block_name': channel_str,
-                'data': {}
-                }
-
-        data['data'][channel_str + '_R'] = res_reading
-                    
-        session.app.publish_to_feed('resistances', data)
-        self.log.debug("{data}", data=session.data)
-                
-        # For session.data
-        field_dict = {channel_str: {"R": res_reading,
-                                    "timestamp": current_time_A}}
-        session.data['fields'].update(field_dict)
-               
-        return True, res_reading
-   
-    #paul added:
-    @ocs_agent.param('_')    
-    def get_one_measurement_B(self, session, params=None):
-    
-        session.data = {"fields": {}}
-        res_reading = float(self.module.channel_B.get_resistance())
-        current_time_B = time.time()
-        channel_str = 'Channel_B'
-                
-        # Setup feed dictionary
-        data = {'timestamp': current_time_B,
-                'block_name': channel_str,
-                'data': {}
-                }
-
-        data['data'][channel_str + '_R'] = res_reading
-                    
-        session.app.publish_to_feed('resistances', data)
-        self.log.debug("{data}", data=session.data)
-                
-        # For session.data
-        field_dict = {channel_str: {"R": res_reading,
-                                    "timestamp": current_time_B}}
-        session.data['fields'].update(field_dict)
-               
-        return True, res_reading
-   
-
-
 def make_parser(parser=None):
     """Build the argument parser for the Agent. Allows sphinx to automatically
     build documentation based on this function.
@@ -307,7 +253,9 @@ def make_parser(parser=None):
     pgroup = parser.add_argument_group('Agent Options')
     pgroup.add_argument('--port')
     pgroup.add_argument('--serial-number')
-
+    pgroup.add_argument('--mode', type=str, default='acq',
+                        choices=['idle', 'init', 'acq'],
+                        help="Starting action for the Agent.")
     return parser
 
 
@@ -324,7 +272,13 @@ def main(args=None):
                                   parser=parser,
                                   args=args)
 
-    
+    init_params = False
+    if args.mode == 'init':
+        init_params = {'auto_acquire': False,
+                       'acq_params': {}}
+    elif args.mode == 'acq':
+        init_params = {'auto_acquire': True,
+                       'acq_params': {}}
 
     # Interpret options in the context of site_config.
     print('I am in charge of device with serial number: %s' % args.serial_number)
@@ -336,9 +290,6 @@ def main(args=None):
     agent.register_task('init_ls325', ls325_agent.init_ls325)
     agent.register_task('get_heater_units', ls325_agent.get_heater_units)
     agent.register_task('set_heater_units', ls325_agent.set_heater_units)
-    #register task with get_one_measurement
-    agent.register_task('get_one_measurement_A', ls325_agent.get_one_measurement_A)
-    agent.register_task('get_one_measurement_B', ls325_agent.get_one_measurement_B)
     # And many more to come...
 
     runner.run(agent, auto_reconnect=True)

@@ -26,7 +26,7 @@ class LS325:
         self.port = port
         self.baudrate = baudrate
         self.timeout = timeout
-        self.com = serial.Serial(self.port, self.baudrate, self._bytesize, 	self._parity, self._stopbits, self.timeout)
+        self.com = serial.Serial(self.port, self.baudrate, self._bytesize, self._parity, self._stopbits, self.timeout)
         self.id = self.get_id()
         self.channel_A = Channel(self, 'A')
         self.channel_B = Channel(self, 'B')

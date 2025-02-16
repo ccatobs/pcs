@@ -203,8 +203,7 @@ class Bluefors_CU_Agent:
                         continue
                 
                 for i in range(1,7):
-                    pressure, timestamp_ms = self.module.get_pressure(i)
-                    timestamp = (timestamp_ms)/1000
+                    pressure, timestamp = self.module.get_pressure(i)
                     channel_str = 'p' + str(i)
                     data = {
                         'timestamp': timestamp,
@@ -220,8 +219,7 @@ class Bluefors_CU_Agent:
                     time.sleep(2)
               
                   
-                flow, timestamp_ms = self.module.get_flow()
-                timestamp = (timestamp_ms)/1000
+                flow, timestamp = self.module.get_flow()
                 channel_str = 'flow_rate'
                 data = {
                    'timestamp': timestamp,

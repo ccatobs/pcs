@@ -53,8 +53,8 @@ class BFCU:
         """
         response = self.msg('/values/mapper/bf/pressures/p' + str(value))
         latest_value = response['data']['mapper.bf.pressures.p' + str(value)]['content']['latest_value']
-        pressure = latest_value['value']
-        time = latest_value['date']
+        pressure = float(latest_value['value']) * 1000
+        time = (latest_value['date']) / 1000
          
         return pressure, time
         
@@ -63,8 +63,8 @@ class BFCU:
         
         response = self.msg('/values/mapper/bf/flow')
         latest_value = response['data']['mapper.bf.flow']['content']['latest_value']
-        flow = latest_value['value']
-        time = latest_value['date']
+        flow = float(latest_value['value'])
+        time = (latest_value['date']) / 1000
         
         return flow, time
         

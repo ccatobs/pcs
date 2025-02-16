@@ -172,28 +172,7 @@ class Bluefors_CU_Agent:
         
     @ocs_agent.param('_')
     def acq(self, session, params=None):
-        """acq()
-
-        **Process** - Acquire data from the BF TC. Set to check for new data at
-                      2 Hz - this needs to be adjusted if wait_time+meas_time
-                      in the BF TC is shorter than a second (it is much longer
-                      than 1 sec by default).
-
-        Notes:
-            The most recent data collected is stored in session data in the
-            structure::
-
-                >>> response.session['data']
-                {"fields":
-                    {"Channel_05": {"T": 293.644, "R": 33.752, "timestamp": 1601924482.722671},
-                     "Channel_06": {"T": 0, "R": 1022.44, "timestamp": 1601924499.5258765},
-                     "Channel_08": {"T": 0, "R": 1026.98, "timestamp": 1601924494.8172355},
-                     "Channel_01": {"T": 293.41, "R": 108.093, "timestamp": 1601924450.9315426},
-                     "Channel_02": {"T": 293.701, "R": 30.7398, "timestamp": 1601924466.6130798},
-                    }
-                }
-
-        """
+   
         pm = Pacemaker(2, quantize=True) # OCS pacemaker set to check for new data at 2 Hz
 
         with self._acq_proc_lock.acquire_timeout(timeout=0, job='acq') \
@@ -223,8 +202,9 @@ class Bluefors_CU_Agent:
                                       f"currently held by {self._lock.job}.")
                         continue
                 
-                for i in range(1,6):
-                    pressure, timestamp = self.module.get_pressure(i)
+                for i in range(1,7):
+                    pressure, timestamp_ms = self.module.get_pressure(i)
+                    timestamp = (timestamp_ms)/1000
                     channel_str = 'p' + str(i)
                     data = {
                         'timestamp': timestamp,
@@ -237,8 +217,11 @@ class Bluefors_CU_Agent:
                     field_dict = {channel_str: {"pressure": pressure,
                                                 "timestamp": timestamp}}
                     session.data['fields'].update(field_dict)
-                    
-                flow, timestamp = self.module.get_flow()
+                    time.sleep(2)
+              
+                  
+                flow, timestamp_ms = self.module.get_flow()
+                timestamp = (timestamp_ms)/1000
                 channel_str = 'flow_rate'
                 data = {
                    'timestamp': timestamp,
@@ -253,9 +236,9 @@ class Bluefors_CU_Agent:
                 field_dict = {channel_str: {"value": flow,
                                                 "timestamp": timestamp}}
                 session.data['fields'].update(field_dict)                
-
+         
         return True, 'Acquisition exited cleanly.'                            
-
+       
     def _stop_acq(self, session, params=None):
         """
         Stops acq process.

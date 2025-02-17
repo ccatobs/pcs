@@ -16,17 +16,16 @@ class BFCU:
 
     """
 
-    def __init__(self,ip,key=None,timeout=10):
+    def __init__(self,ip,key,port='49098',timeout=10):
         self.ip = ip
         self.api_key = key
         self.timeout = timeout
-        self.https_root = 'https://' + str(self.ip) + ':49098'
-        self.http_root = 'http://' + str(self.ip) + ':49099'
+        self.https_root = 'https://' + str(self.ip) + ':' + str(port)
         self.id = self.get_id()
 
     def msg(self,path):
         """
-            Send message to the BF control unit over HTTPS or HTTP via the requests package.
+            Send message to the BF control unit over HTTPS via the requests package.
 
             Parameters:
             path (str) - the location in the BF control unit API of the command you want
@@ -37,14 +36,9 @@ class BFCU:
                              will send a GET request. It sends POST requests for
                              a dictionary with keys.
         """
-        if self.ip == 'localhost':
-            url = self.http_root + path
-            req = requests.get(url, timeout=self.timeout)
-            resp = req.json()
-        else:
-            url = self.https_root + path + '/?key=' + str(self.api_key)
-            req = requests.get(url, timeout=self.timeout, verify='server-cert.pem')
-            resp = req.json()
+        url = self.https_root + path + '/?key=' + str(self.api_key)
+        req = requests.get(url, timeout=self.timeout, verify='server-cert.pem')
+        resp = req.json()
         
         return resp
     

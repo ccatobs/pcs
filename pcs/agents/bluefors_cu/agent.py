@@ -76,7 +76,7 @@ class Bluefors_CU_Agent:
     
     """
     
-    def __init__(self, agent, ip, key):
+    def __init__(self, agent, ip, key=None):
 
         # self._acq_proc_lock is held for the duration of the acq Process.
         # Tasks that require acq to not be running, at all, should use

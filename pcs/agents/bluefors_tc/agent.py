@@ -109,6 +109,10 @@ class Bluefors_TC_Agent:
                                  record=True,
                                  agg_params=agg_params,
                                  buffer_time=1)
+        self.agent.register_feed('heaters',
+                                 record=True,
+                                 agg_params=agg_params,
+                                 buffer_time=1)
 
     @ocs_agent.param('auto_acquire', default=False, type=bool)
     @ocs_agent.param('acq_params', type=dict, default=None)
@@ -347,11 +351,39 @@ class Bluefors_TC_Agent:
                     'block_name': heater,
                     'data': {'{}_heater_state'.format(heater): state}
                     }
-            session.app.publish_to_feed('temperatures', data)
+            session.app.publish_to_feed('heaters', data)
             
             
         return True, "{} heater is {}".format(heater, state)
     
+    @ocs_agent.param('heater', type=str, choices=['sample', 'still'])
+    @ocs_agent.param('temp', type=float)        
+    def set_pid_setpoint(self, session, params=None):
+
+        with self._lock.acquire_timeout(job='set_pid_setpoint') as acquired:
+            if not acquired:
+                self.log.warn(f"Could not start Task because "
+                              f"{self._lock.job} is already running")
+                return False, "Could not acquire lock"
+
+            heater = params['heater'].lower()
+            temp = params['temp']
+            
+            
+            if heater == 'still':
+                 print(self.module.still_heater.set_setpoint(temp))
+            if heater == 'sample':
+                print(self.module.sample_heater.set_setpoint(temp))
+                
+            data = {'timestamp': time.time(),
+                    'block_name': heater,
+                    'data': {'{}_heater_setpoint'.format(heater): temp}
+                    }
+            session.app.publish_to_feed('heaters', data)
+            
+        return True, "{} setpoint to {}".format(heater, temp)
+        
+        
 def make_parser(parser=None):
     """Build the argument parser for the Agent. Allows sphinx to automatically
     build documentation based on this function.
@@ -402,6 +434,7 @@ def main(args=None):
 
     agent.register_task('init_bftc', bftc_agent.init_bftc,
                         startup=init_params)
+    agent.register_task('set_pid_setpoint', bftc_agent.set_pid_setpoint, startup=init_params)
     agent.register_task('set_heater_power', bftc_agent.set_heater_power, startup=init_params)
     agent.register_task('heater_switch', bftc_agent.heater_switch, startup=init_params)
     agent.register_process('acq', bftc_agent.acq, bftc_agent._stop_acq)

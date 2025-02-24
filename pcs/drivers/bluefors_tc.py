@@ -267,6 +267,7 @@ class Heater:
     def __init__(self,bftc,heater_num):
         self.bftc = bftc
         self.heater_num = heater_num
+       
 
         # Should we make more parameters object variables?
 
@@ -311,10 +312,24 @@ class Heater:
             print("Heater {} failed to disable. Please investigate.".format(self.heater_num))
 
     def get_pid_mode(self):
-        pass
+        message = {'heater_nr': self.heater_num}
+        
+        return self.bftc.msg('/heater', message)['pid_mode']
 
     def set_pid_mode(self,mode):
-        pass
+        message = {'heater_nr': self.heater_num,
+                   'pid_mode': mode}
+                   
+        path = '/heater/update'
+        
+        resp = self.bftc.msg(path, message)
+        
+        if resp['pid_mode'] == mode:
+            return ("Heater {} pid_mode is {}.".format(self.heater_num,mode))
+        else:
+            return ("Heater {} failed to change pid mode. Please investigate.".format(self.heater_num))
+        
+            
 
     def get_resistance(self):
         pass
@@ -373,11 +388,25 @@ class Heater:
         pass
 
     def get_setpoint(self):
-        pass
+    
+        message = {'heater_nr': self.heater_num}
 
-    def set_setpoint(self,setpoint):
-        # Should be setpoint for standard PID mode
-        pass
+        return self.bftc.msg('/heater', message)['setpoint']
+
+    def set_setpoint(self,temp):
+    
+        message = {'heater_nr': self.heater_num,
+                   'setpoint': temp}
+                   
+        path = '/heater/update'
+        
+        resp = self.bftc.msg(path, message)
+        
+        if resp['setpoint'] == temp:
+            return ("Heater {} setpoint changed to {}.".format(self.heater_num,temp))
+        else:
+            return ("Heater {} failed to change setpoint. Please investigate.".format(self.heater_num))
+        
 
     def get_pid_settings(self):
         # Return P, I, and D

@@ -12,3 +12,4 @@ recursive = true
 aggressive = 2
 exclude =
     docs/conf.py,
+    pcs/mibs/*

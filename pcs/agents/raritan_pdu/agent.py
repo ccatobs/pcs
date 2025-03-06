@@ -45,12 +45,21 @@ def _extract_oid_field_and_value(get_result):
     """
     # OID from SNMP GET
     oid = get_result[0].prettyPrint()
+    field_name = oid.split("::")[1].replace('.', '_')
+    # Some commands for the Raritan end with a channel number and some end
+    # with another descriptor - check first if there is a descriptor present
     # Makes something like 'PDU2-MIB::outletSwitchingState.1.4'
     # look like 'outletSwitchingState_1_04'
-    field_name = oid.split("::")[1].replace('.', '_')
-    outlet_number = field_name.split("_")[-1].rjust(2, '0')
-    separator = "_"
-    field_name = separator.join(field_name.split("_")[:-1] + [outlet_number])
+    field_list = field_name.split("_")
+    if field_list[-1] in [str(i) for i in range(1,25)]:
+        outlet_number = field_list[-1].rjust(2, '0')
+        separator = "_"
+        field_name = separator.join(field_list[:-1] + [outlet_number])
+    else:
+        # There should only be one additional string for the fields we want
+        outlet_number = field_list[-2].rjust(2, '0')
+        separator = "_"
+        field_name = separator.join(field_list[:-2] + [outlet_number, field_list[-1]])
 
     # Grab OID value, mostly these are integers
     oid_value = get_result[1]._value
@@ -115,8 +124,8 @@ def update_cache(get_result, names, outlet_locked, timestamp):
     the OID values, name, and description (decoded string). An example for a
     single OID, with connection status and timestamp information::
 
-        {"outletStatus_0": {"status": 1,
-                            "name": Outlet-1,
+        {"outletSwitchingState_1_01": {"status": 1,
+                            "name": Outlet-01,
                             "description": "on"},
          "pdu_connection": {"last_attempt": 1598543359.6326838,
                             "connected": True},
@@ -233,13 +242,13 @@ class RaritanAgent:
         structure::
 
             >>> response.session['data']
-            {'outletStatus_0':
-                {'status': 1,
-                 'name': 'Outlet-1',
+            {'outletSwitchingState_1_01':
+                {'status': 7,
+                 'name': 'Outlet-01',
                  'description': 'on'},
-             'outletStatus_1':
-                {'status': 0,
-                 'name': 'Outlet-2',
+             'outletSwitchingState_1_02':
+                {'status': 8,
+                 'name': 'Outlet-02',
                  'description': 'off'},
              ...
              'pdu_connection':
@@ -343,6 +352,7 @@ class RaritanAgent:
         """set_outlet(outlet, state)
 
         **Task** - Set a particular outlet to on/off.
+                   If the outlet is already off, this will turn it back on.
 
         Parameters
         ----------

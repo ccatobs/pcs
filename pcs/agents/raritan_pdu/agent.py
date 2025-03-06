@@ -160,7 +160,7 @@ def _adjust_decimal_places(message):
 
     for field in decimal_fields:
         # Identify the field corresponding to the number of decimal places
-        associated_field = 'measurementsOutletSensorValue_' + field[25:]
+        associated_field = 'measurementsOutletSensorValue' + field[25:]
         int_value = message['data'][associated_field]
         decimal_places = message['data'][field]
         # Convert original int value to float

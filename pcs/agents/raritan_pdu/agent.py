@@ -263,7 +263,7 @@ class RaritanAgent:
             # Create the lists of OIDs to send get commands
             # The 1 after the variable is the PDU number - as long as we
             # never link the PDUs, so this is always 1
-            for i in range(self.num_outlets):
+            for i in range(1, self.num_outlets+1):
                 get_list.append(('PDU2-MIB', 'outletSwitchingState', 1, i))
                 name_list.append(('PDU2-MIB', 'outletName', 1, i))
 

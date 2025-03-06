@@ -51,7 +51,7 @@ def _extract_oid_field_and_value(get_result):
     # Makes something like 'PDU2-MIB::outletSwitchingState.1.4'
     # look like 'outletSwitchingState_1_04'
     field_list = field_name.split("_")
-    if field_list[-1] in [str(i) for i in range(1,25)]:
+    if field_list[-1] in [str(i) for i in range(1, 25)]:
         outlet_number = field_list[-1].rjust(2, '0')
         separator = "_"
         field_name = separator.join(field_list[:-1] + [outlet_number])
@@ -106,7 +106,7 @@ def _build_message(get_result, names, time):
             continue
 
         field_list = field_name.split("_")
-        if field_list[-1][-2:] in [str(i).rjust(2,'0') for i in range(1,25)]:
+        if field_list[-1][-2:] in [str(i).rjust(2, '0') for i in range(1, 25)]:
             outlet_number = int(field_list[-1][-2:])
         else:
             # There should only be one additional string for the fields we want
@@ -115,16 +115,17 @@ def _build_message(get_result, names, time):
         if 'DecimalDigits' in field_name:
             message['data'][field_name] = oid_value
         else:
-        # Appropriately accounts for indices starting at 1 in names
+            # Appropriately accounts for indices starting at 1 in names
             message['data'][field_name] = oid_value
             message['data'][field_name + "_name"] = names[outlet_number - 1]
             message['data'][field_name + "_description"] = oid_description
 
     return message
 
+
 def _adjust_decimal_places(message):
     """Converts the raw integers for continuous variables to floats.
-    
+
     The Raritan PDU is able to query continuous variables for each inlet and
     outlet like the rmsVoltage, rmsCurrent, etc. These values are returned as
     an integer, and a separate field must be queried for each of these variables
@@ -143,7 +144,7 @@ def _adjust_decimal_places(message):
     published - only the final float values are stored.
 
     Parameters
-    ---------- 
+    ----------
     message : dict
         OCS Feed formatted message for publishing
 
@@ -153,7 +154,7 @@ def _adjust_decimal_places(message):
         OCS Feed formatted message for publishing with corrected float values
         and with decimal keys removed
     """
-    
+
     # First, find the relevant fields with decimal keys
     all_fields = list(message['data'].keys())
     decimal_fields = [s for s in all_fields if 'DecimalDigits' in s]
@@ -168,8 +169,9 @@ def _adjust_decimal_places(message):
         message['data'][associated_field] = float_value
         # Removing the decimal key to avoid later confusion
         del message['data'][field]
-        
+
     return message
+
 
 def update_cache(get_result, names, outlet_locked, timestamp):
     """Update the OID Value Cache.
@@ -213,7 +215,7 @@ def update_cache(get_result, names, outlet_locked, timestamp):
             continue
 
         field_list = field_name.split("_")
-        if field_list[-1][-2:] in [str(i).rjust(2,'0') for i in range(1,25)]:
+        if field_list[-1][-2:] in [str(i).rjust(2, '0') for i in range(1, 25)]:
             outlet_number = int(field_list[-1][-2:])
         else:
             # There should only be one additional string for the fields we want
@@ -433,7 +435,7 @@ class RaritanAgent:
 
             # Check if outlet is locked
             outlet_id = params['outlet']
-            if self.outlet_locked[outlet_id-1]:
+            if self.outlet_locked[outlet_id - 1]:
                 return False, 'Outlet {} is locked. Cannot turn outlet on/off.'.format(params['outlet'])
 
             # Convert given state parameter to integer
@@ -475,12 +477,12 @@ class RaritanAgent:
 
             # Check if outlet is locked
             outlet_id = params['outlet']
-            if self.outlet_locked[outlet_id-1]:
+            if self.outlet_locked[outlet_id - 1]:
                 return False, 'Outlet {} is locked. Cannot cycle outlet.'.format(params['outlet'])
 
             # Issue SNMP SET command to use a cycle time that isn't the global setting
             set_cycle = [('PDU2-MIB', 'outletUseGlobalPowerCyclingPowerOffPeriod', 1, outlet_id)]
-            setcmd0 = yield self.snmp.set(set_cycle, self.version, 2) # 2 is false for SNMP TruthValue (1 is true)
+            setcmd0 = yield self.snmp.set(set_cycle, self.version, 2)  # 2 is false for SNMP TruthValue (1 is true)
             self.log.info('{}'.format(setcmd0))
             # Issue SNMP SET command for cycle time
             set_cycle = [('PDU2-MIB', 'outletPowerCyclingPowerOffPeriod', 1, outlet_id)]
@@ -489,7 +491,7 @@ class RaritanAgent:
 
             # Issue SNMP SET command to given outlet
             outlet = [('PDU2-MIB', 'switchingOperation', 1, outlet_id)]
-            setcmd2 = yield self.snmp.set(outlet, self.version, 2) # 2 is cycle for this command
+            setcmd2 = yield self.snmp.set(outlet, self.version, 2)  # 2 is cycle for this command
             self.log.info('{}'.format(setcmd2))
             self.log.info('Cycling outlet {} for {} seconds'.
                           format(outlet_id, params['cycle_time']))

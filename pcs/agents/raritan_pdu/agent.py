@@ -112,10 +112,13 @@ def _build_message(get_result, names, time):
             # There should only be one additional string for the fields we want
             outlet_number = int(field_list[-2][-2:])
 
+        if 'DecimalDigits' in field_name:
+            message['data'][field_name] = oid_value
+        else:
         # Appropriately accounts for indices starting at 1 in names
-        message['data'][field_name] = oid_value
-        message['data'][field_name + "_name"] = names[outlet_number - 1]
-        message['data'][field_name + "_description"] = oid_description
+            message['data'][field_name] = oid_value
+            message['data'][field_name + "_name"] = names[outlet_number - 1]
+            message['data'][field_name + "_description"] = oid_description
 
     return message
 
@@ -127,6 +130,8 @@ def _adjust_decimal_places(message):
     an integer, and a separate field must be queried for each of these variables
     for a given outlet to know how many decimal places that integer must be
     adjusted by to give the true float value.
+
+    Currently only works with keys from measurementsOutletSensorValue!
 
     For example, querying a 60 Hz outlet AC frequency will return '600' and
     the decimal place query for this outlet will return '1'. The true float
@@ -146,8 +151,25 @@ def _adjust_decimal_places(message):
     -------
     message : dict
         OCS Feed formatted message for publishing with corrected float values
+        and with decimal keys removed
     """
-    return None
+    
+    # First, find the relevant fields with decimal keys
+    all_fields = list(message['data'].keys())
+    decimal_fields = [s for s in all_fields if 'DecimalDigits' in s]
+
+    for field in decimal_fields:
+        # Identify the field corresponding to the number of decimal places
+        associated_field = 'measurementsOutletSensorValue_' + field[25:]
+        int_value = message['data'][associated_field]
+        decimal_places = message['data'][field]
+        # Convert original int value to float
+        float_value = int_value / 10**decimal_places
+        message['data'][associated_field] = float_value
+        # Removing the decimal key to avoid later confusion
+        del message['data'][field]
+        
+    return message
 
 def update_cache(get_result, names, outlet_locked, timestamp):
     """Update the OID Value Cache.
@@ -366,6 +388,7 @@ class RaritanAgent:
                 self.lastGet = time.time()
                 # Publish to feed
                 message = _build_message(get_result, names, read_time)
+                message = _adjust_decimal_places(message)
                 self.log.debug("{msg}", msg=message)
                 session.app.publish_to_feed('raritan_pdu', message)
             except Exception as e:

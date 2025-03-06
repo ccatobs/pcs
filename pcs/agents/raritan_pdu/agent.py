@@ -348,8 +348,8 @@ class RaritanAgent:
                 return False, "Could not acquire lock"
 
             # Check if outlet is locked
-            outlet_id = params['outlet'] - 1
-            if self.outlet_locked[outlet_id]:
+            outlet_id = params['outlet']
+            if self.outlet_locked[outlet_id-1]:
                 return False, 'Outlet {} is locked. Cannot turn outlet on/off.'.format(params['outlet'])
 
             # Convert given state parameter to integer
@@ -390,8 +390,8 @@ class RaritanAgent:
                 return False, "Could not acquire lock"
 
             # Check if outlet is locked
-            outlet_id = params['outlet'] - 1
-            if self.outlet_locked[outlet_id]:
+            outlet_id = params['outlet']
+            if self.outlet_locked[outlet_id-1]:
                 return False, 'Outlet {} is locked. Cannot cycle outlet.'.format(params['outlet'])
 
             # Issue SNMP SET command to use a cycle time that isn't the global setting

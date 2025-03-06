@@ -449,7 +449,7 @@ def add_agent_args(parser=None):
         parser = argparse.ArgumentParser()
 
     pgroup = parser.add_argument_group("Agent Options")
-    pgroup.add_argument("--address", help="Address to listen to.")
+    pgroup.add_argument("--ip-address", help="Address to listen to.")
     pgroup.add_argument("--port", default=161,
                         help="Port to listen on.")
     pgroup.add_argument("--snmp-version", default='2', choices=['1', '2', '3'],
@@ -469,7 +469,7 @@ def main(args=None):
     txaio.start_logging(level=os.environ.get("LOGLEVEL", "info"))
 
     parser = add_agent_args()
-    args = site_config.parse_args(agent_class='raritanAgent',
+    args = site_config.parse_args(agent_class='RaritanAgent',
                                   parser=parser,
                                   args=args)
 

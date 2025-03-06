@@ -105,13 +105,49 @@ def _build_message(get_result, names, time):
         if oid_value is None:
             continue
 
+        field_list = field_name.split("_")
+        if field_list[-1][-2:] in [str(i).rjust(2,'0') for i in range(1,25)]:
+            outlet_number = int(field_list[-1][-2:])
+        else:
+            # There should only be one additional string for the fields we want
+            outlet_number = int(field_list[-2][-2:])
+
         # Appropriately accounts for indices starting at 1 in names
         message['data'][field_name] = oid_value
-        message['data'][field_name + "_name"] = names[int(field_name[-2:]) - 1]
+        message['data'][field_name + "_name"] = names[outlet_number - 1]
         message['data'][field_name + "_description"] = oid_description
 
     return message
 
+def _adjust_decimal_places(message):
+    """Converts the raw integers for continuous variables to floats.
+    
+    The Raritan PDU is able to query continuous variables for each inlet and
+    outlet like the rmsVoltage, rmsCurrent, etc. These values are returned as
+    an integer, and a separate field must be queried for each of these variables
+    for a given outlet to know how many decimal places that integer must be
+    adjusted by to give the true float value.
+
+    For example, querying a 60 Hz outlet AC frequency will return '600' and
+    the decimal place query for this outlet will return '1'. The true float
+    value is 600/10**1 = 60.0 Hz.
+
+    _build_message parses all fields. This function combines the measurement
+    and decimal place keys to put the values into the appropriate floats.
+    It then removes the decimal place keys from the message before it is
+    published - only the final float values are stored.
+
+    Parameters
+    ---------- 
+    message : dict
+        OCS Feed formatted message for publishing
+
+    Returns
+    -------
+    message : dict
+        OCS Feed formatted message for publishing with corrected float values
+    """
+    return None
 
 def update_cache(get_result, names, outlet_locked, timestamp):
     """Update the OID Value Cache.

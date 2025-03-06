@@ -396,7 +396,7 @@ class RaritanAgent:
 
             # Issue SNMP SET command to use a cycle time that isn't the global setting
             set_cycle = [('PDU2-MIB', 'outletUseGlobalPowerCyclingPowerOffPeriod', 1, outlet_id)]
-            setcmd0 = yield self.snmp.set(set_cycle, self.version, 0)
+            setcmd0 = yield self.snmp.set(set_cycle, self.version, 2) # 2 is false for SNMP TruthValue (1 is true)
             self.log.info('{}'.format(setcmd0))
             # Issue SNMP SET command for cycle time
             set_cycle = [('PDU2-MIB', 'outletPowerCyclingPowerOffPeriod', 1, outlet_id)]
@@ -405,7 +405,7 @@ class RaritanAgent:
 
             # Issue SNMP SET command to given outlet
             outlet = [('PDU2-MIB', 'switchingOperation', 1, outlet_id)]
-            setcmd2 = yield self.snmp.set(outlet, self.version, 2)
+            setcmd2 = yield self.snmp.set(outlet, self.version, 2) # 2 is cycle for this command
             self.log.info('{}'.format(setcmd2))
             self.log.info('Cycling outlet {} for {} seconds'.
                           format(outlet_id, params['cycle_time']))

@@ -7,16 +7,20 @@ twisted
 # hardware communication
 pyserial
 requests
+json
+pysnmp==4.4.12
+pysmi
+pyasn1==0.4.8
 
 # common dependencies
 numpy
 
 # Docs
-# see docs/requirements.txt once it is live!
+# see docs/requirements.txt
 
 # testing + development
 setuptools-scm
-# -r requiements/testing.txt - once testing is up!
+# -r requirements/testing.txt - once testing is up!
 
 # Contributing
 pre-commit

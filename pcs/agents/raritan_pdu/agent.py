@@ -190,10 +190,17 @@ def update_cache(get_result, names, outlet_locked, timestamp):
         if oid_value is None:
             continue
 
+        field_list = field_name.split("_")
+        if field_list[-1][-2:] in [str(i).rjust(2,'0') for i in range(1,25)]:
+            outlet_number = int(field_list[-1][-2:])
+        else:
+            # There should only be one additional string for the fields we want
+            outlet_number = int(field_list[-2][-2:])
+
         # Update OID Cache for session.data
         oid_cache[field_name] = {"status": oid_value}
-        oid_cache[field_name]["name"] = names[int(field_name[-1])]
-        oid_cache[field_name]["locked"] = outlet_locked[int(field_name[-1])]
+        oid_cache[field_name]["name"] = names[outlet_number - 1]
+        oid_cache[field_name]["locked"] = outlet_locked[outlet_number - 1]
         oid_cache[field_name]["description"] = oid_description
         oid_cache['pdu_connection'] = {'last_attempt': time.time(),
                                        'connected': True}

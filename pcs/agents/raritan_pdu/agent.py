@@ -13,6 +13,7 @@ from pcs.snmp import SNMPTwister
 # For logging
 txaio.use_twisted()
 
+
 def _extract_oid_field_and_value(get_result):
     """Extract field names and OID values from SNMP GET results.
 
@@ -36,7 +37,7 @@ def _extract_oid_field_and_value(get_result):
     Returns
     -------
     field_name : str
-        Field name for an OID, i.e. 'outletStatus_1'
+        Field name for an OID, i.e. 'outletStatus_01'
     oid_value : int, byte, or str
         Associated value for the OID. Returns None if not an int, byte, or str
     oid_description : str
@@ -44,9 +45,12 @@ def _extract_oid_field_and_value(get_result):
     """
     # OID from SNMP GET
     oid = get_result[0].prettyPrint()
-    # Makes something like 'IBOOTPDU-MIB::outletStatus.1'
-    # look like 'outletStatus_1'
+    # Makes something like 'PDU2-MIB::outletSwitchingState.1.4'
+    # look like 'outletSwitchingState_1_04'
     field_name = oid.split("::")[1].replace('.', '_')
+    outlet_number = field_name.split("_")[-1].rjust(2, '0')
+    separator = "_"
+    field_name = separator.join(field_name.split("_")[:-1] + [outlet_number])
 
     # Grab OID value, mostly these are integers
     oid_value = get_result[1]._value
@@ -81,7 +85,7 @@ def _build_message(get_result, names, time):
         OCS Feed formatted message for publishing
     """
     message = {
-        'block_name': 'ibootbar',
+        'block_name': 'raritan_pdu',
         'timestamp': time,
         'data': {}
     }
@@ -92,8 +96,9 @@ def _build_message(get_result, names, time):
         if oid_value is None:
             continue
 
+        # Appropriately accounts for indices starting at 1 in names
         message['data'][field_name] = oid_value
-        message['data'][field_name + "_name"] = names[int(field_name[-1])]
+        message['data'][field_name + "_name"] = names[int(field_name[-2:]) - 1]
         message['data'][field_name + "_description"] = oid_description
 
     return message
@@ -197,6 +202,7 @@ class RaritanAgent:
                 else:
                     self.outlet_locked[i] = False
 
+        self.log.info(f'Connecting to PDU at IP {address}.')
         self.log.info(f'Using SNMP version {version}.')
         self.version = version
         self.address = address
@@ -213,7 +219,7 @@ class RaritanAgent:
                                  record=True,
                                  agg_params=agg_params,
                                  buffer_time=0)
-        
+
     @ocs_agent.param('test_mode', default=False, type=bool)
     @inlineCallbacks
     def acq(self, session, params=None):
@@ -258,12 +264,12 @@ class RaritanAgent:
 
             get_list = []
             name_list = []
-            names = [f'Outlet-{i}' for i in range(1,self.num_outlets+1)]
+            names = [f'Outlet-{i:02}' for i in range(1, self.num_outlets + 1)]
 
             # Create the lists of OIDs to send get commands
             # The 1 after the variable is the PDU number - as long as we
             # never link the PDUs, so this is always 1
-            for i in range(1, self.num_outlets+1):
+            for i in range(1, self.num_outlets + 1):
                 get_list.append(('PDU2-MIB', 'outletSwitchingState', 1, i))
                 name_list.append(('PDU2-MIB', 'outletName', 1, i))
 
@@ -321,8 +327,8 @@ class RaritanAgent:
             return True, "Stopping Recording"
         else:
             return False, "Acq is not currently running"
-        
-    @ocs_agent.param('outlet', choices=[i for i in range(1,25)])
+
+    @ocs_agent.param('outlet', choices=[i for i in range(1, 25)])
     @ocs_agent.param('state', choices=['on', 'off'])
     @inlineCallbacks
     def set_outlet(self, session, params=None):
@@ -362,8 +368,8 @@ class RaritanAgent:
 
         return True, 'Set outlet {} to {}'.\
             format(params['outlet'], params['state'])
-    
-    @ocs_agent.param('outlet', choices=[i for i in range(1,25)])
+
+    @ocs_agent.param('outlet', choices=[i for i in range(1, 25)])
     @ocs_agent.param('cycle_time', default=10, type=int)
     @inlineCallbacks
     def cycle_outlet(self, session, params=None):
@@ -412,7 +418,7 @@ class RaritanAgent:
         return True, 'Cycled outlet {} for {} seconds'.\
             format(params['outlet'], params['cycle_time'])
 
-    @ocs_agent.param('outlet', choices=[i for i in range(1,25)])
+    @ocs_agent.param('outlet', choices=[i for i in range(1, 25)])
     @ocs_agent.param('lock', choices=[True, False])
     def lock_outlet(self, session, params=None):
         """lock_outlet(outlet, lock)
@@ -480,11 +486,11 @@ def main(args=None):
 
     agent, runner = ocs_agent.init_site_agent(args)
     p = RaritanAgent(agent,
-                      address=args.ip_address,
-                      port=int(args.port),
-                      version=int(args.snmp_version),
-                      period=args.sample_period,
-                      lock_outlet=args.lock_outlet)
+                     address=args.ip_address,
+                     port=int(args.port),
+                     version=int(args.snmp_version),
+                     period=args.sample_period,
+                     lock_outlet=args.lock_outlet)
 
     agent.register_process("acq",
                            p.acq,

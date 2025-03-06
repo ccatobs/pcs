@@ -348,7 +348,7 @@ class RaritanAgent:
                 return False, "Could not acquire lock"
 
             # Check if outlet is locked
-            outlet_id = params['outlet']
+            outlet_id = params['outlet'] - 1
             if self.outlet_locked[outlet_id]:
                 return False, 'Outlet {} is locked. Cannot turn outlet on/off.'.format(params['outlet'])
 
@@ -395,16 +395,16 @@ class RaritanAgent:
                 return False, 'Outlet {} is locked. Cannot cycle outlet.'.format(params['outlet'])
 
             # Issue SNMP SET command to use a cycle time that isn't the global setting
-            set_cycle = [('PDU2-MIB', 'outletUseGlobalPowerCyclingPowerOffPeriod', outlet_id)]
+            set_cycle = [('PDU2-MIB', 'outletUseGlobalPowerCyclingPowerOffPeriod', 1, outlet_id)]
             setcmd0 = yield self.snmp.set(set_cycle, self.version, 0)
             self.log.info('{}'.format(setcmd0))
             # Issue SNMP SET command for cycle time
-            set_cycle = [('PDU2-MIB', 'outletPowerCyclingPowerOffPeriod', outlet_id)]
+            set_cycle = [('PDU2-MIB', 'outletPowerCyclingPowerOffPeriod', 1, outlet_id)]
             setcmd1 = yield self.snmp.set(set_cycle, self.version, params['cycle_time'])
             self.log.info('{}'.format(setcmd1))
 
             # Issue SNMP SET command to given outlet
-            outlet = [('PDU2-MIB', 'switchingOperation', outlet_id)]
+            outlet = [('PDU2-MIB', 'switchingOperation', 1, outlet_id)]
             setcmd2 = yield self.snmp.set(outlet, self.version, 2)
             self.log.info('{}'.format(setcmd2))
             self.log.info('Cycling outlet {} for {} seconds'.

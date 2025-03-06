@@ -480,7 +480,7 @@ def main(args=None):
 
     agent, runner = ocs_agent.init_site_agent(args)
     p = RaritanAgent(agent,
-                      address=args.address,
+                      address=args.ip_address,
                       port=int(args.port),
                       version=int(args.snmp_version),
                       period=args.sample_period,

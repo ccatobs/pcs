@@ -271,6 +271,14 @@ class RaritanAgent:
             # never link the PDUs, so this is always 1
             for i in range(1, self.num_outlets + 1):
                 get_list.append(('PDU2-MIB', 'outletSwitchingState', 1, i))
+                get_list.append(('PDU2-MIB', 'measurementsOutletSensorValue', 1, i, 'frequency'))
+                get_list.append(('PDU2-MIB', 'measurementsOutletSensorValue', 1, i, 'rmsCurrent'))
+                get_list.append(('PDU2-MIB', 'measurementsOutletSensorValue', 1, i, 'rmsVoltage'))
+                get_list.append(('PDU2-MIB', 'measurementsOutletSensorValue', 1, i, 'activePower'))
+                get_list.append(('PDU2-MIB', 'outletSensorDecimalDigits', 1, i, 'frequency'))
+                get_list.append(('PDU2-MIB', 'outletSensorDecimalDigits', 1, i, 'rmsCurrent'))
+                get_list.append(('PDU2-MIB', 'outletSensorDecimalDigits', 1, i, 'rmsVoltage'))
+                get_list.append(('PDU2-MIB', 'outletSensorDecimalDigits', 1, i, 'activePower'))
                 name_list.append(('PDU2-MIB', 'outletName', 1, i))
 
             # Issue SNMP GET commands

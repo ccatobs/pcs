@@ -5,6 +5,9 @@ pcs/_version.py
 __pycache__/
 *.py[cod]
 *$py.class
+*.nfs*
+*.swp*
+*.swo
 
 # C extensions
 *.so

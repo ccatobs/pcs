@@ -36,5 +36,5 @@ Agent Reference        Details on configuration and use of the OCS Agents
 
    agents/bluefors_tc
    agents/lakeshore325
-
+   agents/acu_interface
 

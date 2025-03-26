@@ -274,9 +274,11 @@ class RaritanAgent:
         if lock_outlet is not None:
             for i in range(self.num_outlets):
                 if i in lock_outlet:
-                    self.outlet_locked[i] = True
+                    # The minus 1 is so users can pass in outlet
+                    # names labeled 1-24 on the PDU
+                    self.outlet_locked[i-1] = True
                 else:
-                    self.outlet_locked[i] = False
+                    self.outlet_locked[i-1] = False
 
         self.log.info(f'Connecting to PDU at IP {address}.')
         self.log.info(f'Using SNMP version {version}.')
@@ -548,7 +550,7 @@ def add_agent_args(parser=None):
                         help="SNMP version for communication. Must match "
                              + "configuration on the ibootbar.")
     pgroup.add_argument("--mode", default='acq', choices=['acq', 'test'])
-    pgroup.add_argument("--sample_period", default=60, type=int,
+    pgroup.add_argument("--sample-period", default=60, type=int,
                         help="Sampling period in seconds")
     pgroup.add_argument("--lock-outlet", nargs='+', type=int,
                         help="List of outlets to lock on startup.")

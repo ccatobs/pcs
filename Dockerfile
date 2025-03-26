@@ -5,6 +5,10 @@
 # (As of Mar 2025) Uses Ubuntu 22.04, installs Python, makes venv
 FROM simonsobs/ocs:v0.11.3-19-gd729e04
 
+# Install addition network related packages for ACU interface agent
+RUN apt-get update -y && apt-get install -y iputils-ping \
+    curl
+
 # Copy in and install requirements
 COPY requirements.txt /app/pcs/requirements.txt
 WORKDIR /app/pcs/

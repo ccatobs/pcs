@@ -87,9 +87,12 @@ format that is consumable via pysnmp.
 
 As of March 2025, the Prime-Cam PDUs were running firmware version 4.2.10.5-50400.
 Support documents for these PDUs (like the quick start guide, user guide, and MIB guide)
-can be found `here<https://www.raritan.com/support/product/pdu-g4/px4-version-4.2.10>`_ for
-this version and `here<https://www.raritan.com/support/product/pdu-g4>`_ for all versions.
+can be found `here`_ for
+this version and `on this page`_ for all versions.
 The original MIB text file is also available through this Raritan support document page.
+
+.. _here: https://www.raritan.com/support/product/pdu-g4/px4-version-4.2.10
+.. _on this page: https://www.raritan.com/support/product/pdu-g4
 
 Before the agent can be used, the PDU must be configured to allow SNMP. This was configured by 
 sshing into the PDU and running ``network services snmp v1/v2c enable`` from the config menu 

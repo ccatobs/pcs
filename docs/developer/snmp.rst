@@ -74,7 +74,7 @@ A standalone example of using ``SNMPTwister`` to interact with a device::
     reactor.run()
 
 Running this code would return a list of the names of the commands and the
-states for all 24 outlets. The first outlet's output looks like:
+states for all 24 outlets. The first outlet's output looks like::
 
     PDU2-MIB::outletSwitchingState.1.1
     7

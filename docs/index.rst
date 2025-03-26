@@ -21,6 +21,8 @@ Section              Description
 User Guide             Start here for information about the design and use of PCS.
 Agent Reference        Details on configuration and use of the OCS Agents
                        provided by PCS.
+Developer Guide        Information relevant to developers who are contributing to
+                       PCS.
 ===================  ============================================================
 
 .. toctree::
@@ -37,4 +39,10 @@ Agent Reference        Details on configuration and use of the OCS Agents
    agents/bluefors_tc
    agents/lakeshore325
    agents/acu_interface
+   agents/raritan_pdu
 
+.. toctree::
+   :maxdepth: 2
+   :caption: Developer Guide
+
+   developer/snmp

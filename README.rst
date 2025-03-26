@@ -16,19 +16,23 @@ Once the repo is cloned, you can pip install it from within the top level of the
 
 Docker Images
 -------------
-Not much to say yet!
+Coming soon!
 
 Documentation
 -------------
-Not much to say yet!
+The documentation for individual PCS agents can be found at `this ReadtheDocs page`_.
+
+.. _this ReadtheDocs page: https://pcs.readthedocs.io/en/latest/
 
 Tests
 -----
-Not much to say yet!
+Tests have not yet been implemented for PCS, though it is a long-term goal to include them.
 
 Contribution Guidelines
 -----------------------
-Not much to say yet!
+Anyone developing agents for Prime-Cam related hardware is welcome to contribute new agents! Please make a new
+branch, develop and test your agent with its associated hardware on it, then submit a pull request for moderator
+review to merge it into the main branch of PCS.
 
 License
 -------

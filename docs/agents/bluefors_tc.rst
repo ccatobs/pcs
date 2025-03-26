@@ -6,8 +6,10 @@
 Bluefors Temperature Controller
 ===============================
 
-.. todo::
-    Describe the Bluefors Temperature Controller
+The Bluefors Temperature Controller agent monitors and controls
+the Bluefors Temperature Controller device for temperature readout
+and DR control in newer Bluefors dilution refrigerators. 
+The monitoring is done via HTTP via the requests package.
 
 .. argparse::
     :filename: ../pcs/agents/bluefors_tc/agent.py

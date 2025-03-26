@@ -114,7 +114,10 @@ An example block configuration is shown below::
 Description
 -----------
 
-Antenna Control Unit (ACU) is a specialized computer responsible for moving the telescope platform and capturing the readout of encoder measurements. This system lives within the centrally managed Telescope Control System (TCS). Within the PrimeCam DAQ framework, an interface agent commuincates with the ACU to execute telescope movement for observation scans and writes the position data stream into G3 files in the PCS HK database.
+Antenna Control Unit (ACU) is a specialized computer responsible for moving the telescope platform and capturing the 
+readout of encoder measurements. This system lives within the centrally managed CCAT Telescope Control System (TCS). 
+Within the Prime-Cam DAQ framework, an interface agent commuincates with the ACU to execute telescope movement for 
+observation scans and writes the position data stream into G3 files in the PCS HK database.
 
 
 Agent API

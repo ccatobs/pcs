@@ -1,5 +1,0 @@
-ocs
-twisted
-
-requests
-json

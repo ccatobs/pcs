@@ -3,7 +3,7 @@ name: Docker Image Generation
 on:
   # Triggers the workflow on push or pull request events for specific branches
   push:
-    branches: [ main ]
+    branches: [ released ]
     tags:
       # v0.X.Y pre-release tags
       - 'v0.*.*a*'

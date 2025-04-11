@@ -3,13 +3,15 @@ name: Docker Image Generation
 on:
   # Triggers the workflow on push or pull request events for specific branches
   push:
-    branches: [ released ]
-    tags:
+    release:
+      types: [ released ]
+    #branches: [ released ]
+    #tags:
       # v0.X.Y pre-release tags
-      - 'v0.*.*a*'
-      - 'v0.*.*b*'
-      - 'v0.*.*rc*'
-    #tags: "v*.*.*"
+      #- 'v0.*.*a*'
+      #- 'v0.*.*b*'
+      #- 'v0.*.*rc*'
+    tags: "v*.*.*"
   # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
 

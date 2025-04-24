@@ -40,10 +40,6 @@ from threading import Thread
 from pcs.agents.acu_interface import aculib
 from pcs.agents.acu_interface import drivers as drv
 
-# For logging
-txaio.use_twisted()
-LOG = txaio.make_logger()
-
 
 class ACUAgent:
     """Interface agent to send pointing commands to ACU and
@@ -417,6 +413,3 @@ def main(args=None):
 
 if __name__=='__main__':
     main()
-
-
-

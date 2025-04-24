@@ -15,7 +15,7 @@ live monitoring purposes.
 
 .. argparse::
     :filename: ../pcs/agents/acu_interface/agent.py
-    :func: make_parser
+    :func: add_agent_args
     :prog: python3 agent.py
 
 

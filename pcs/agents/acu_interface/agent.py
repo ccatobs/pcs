@@ -37,8 +37,8 @@ import numpy as np
 from threading import Thread
 
 #import acu modules
-import aculib
-import drivers as drv
+from pcs.agents.acu_interface import aculib
+from pcs.agents.acu_interface import drivers as drv
 
 # For logging
 txaio.use_twisted()

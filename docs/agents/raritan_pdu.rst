@@ -13,7 +13,7 @@ ethernet connection.
 
 .. argparse::
     :filename: ../pcs/agents/raritan_pdu/agent.py
-    :func: make_parser
+    :func: add_agent_args
     :prog: python3 agent.py
 
 Configuration File Examples

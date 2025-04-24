@@ -15,6 +15,10 @@ pyasn1==0.4.8
 # common dependencies
 numpy
 
+# For ACU interface agent
+astropy
+pyyaml
+
 # Docs
 # see docs/requirements.txt
 

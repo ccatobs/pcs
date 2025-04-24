@@ -20,7 +20,7 @@ import argparse
 import txaio
 import random
 from os import environ
-import socket, struct, requests
+import socket, struct
 from autobahn.twisted.util import sleep as dsleep
 
 from ocs import ocs_agent, site_config

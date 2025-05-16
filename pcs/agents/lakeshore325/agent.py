@@ -97,7 +97,7 @@ class LS325_Agent:
             'frame_length': 10 * 60  # [sec]
         }
         
-        self.agent.register_feed('resistances',
+        self.agent.register_feed('temperatures',
                                  record=True,
                                  agg_params=agg_params,
                                  buffer_time=1)
@@ -174,6 +174,7 @@ class LS325_Agent:
             
             while self.take_data:
                 res_reading = float(self.module.channel_A.get_resistance())
+                temp_reading = float(self.module.channel_A.get_kelvin_reading())
                 current_time_A = time.time()
                 channel_str = 'Channel_A'
                 
@@ -185,18 +186,20 @@ class LS325_Agent:
                 }
 
                 data['data'][channel_str + '_R'] = res_reading
-                    
-                session.app.publish_to_feed('resistances', data)
+                data['data'][channel_str + '_T'] = temp_reading
+                
+                session.app.publish_to_feed('temperatures', data)
                 self.log.debug("{data}", data=session.data)
                 
                 # For session.data
-                field_dict = {channel_str: {"R": res_reading,
+                field_dict = {channel_str: {"R": res_reading, "T" : temp_reading,
                                             "timestamp": current_time_A}}
                 session.data['fields'].update(field_dict)
              
                 time.sleep(.1)
                 
                 res_reading = float(self.module.channel_B.get_resistance())
+                temp_reading = float(self.module.channel_B.get_kelvin_reading())
                 current_time_B = time.time()
                 channel_str = 'Channel_B'
                 
@@ -208,12 +211,13 @@ class LS325_Agent:
                 }
 
                 data['data'][channel_str + '_R'] = res_reading
-                    
-                session.app.publish_to_feed('resistances', data)
+                data['data'][channel_str + '_T'] = temp_reading
+                
+                session.app.publish_to_feed('temperatures', data)
                 self.log.debug("{data}", data=session.data)
                 
                 # For session.data
-                field_dict = {channel_str: {"R": res_reading,
+                field_dict = {channel_str: {"R": res_reading, "T" : temp_reading,
                                             "timestamp": current_time_B}}
                 session.data['fields'].update(field_dict)
                 
@@ -241,6 +245,38 @@ class LS325_Agent:
     def get_heater_units(self, session, params=None):
         resp = self.module.heater1.get_units()
         return True, resp
+        
+    @ocs_agent.param('channel', type=str)
+    def get_temperature(self, session, params):
+    	T = self.driver.get_temperature(params['channel'])
+    	return True, {'temperature': T}
+
+    @ocs_agent.param('rng', type=int)
+    def set_heater_range(self, session, params):
+    	self.driver.set_heater_range(params['rng'])
+    	return True, {'range': params['rng']}
+
+    @ocs_agent.param('percent', type=float)
+    def set_heater_power(self, session, params):
+    	self.driver.set_heater_power(params['percent'])
+    	return True, {'power': params['percent']}
+    	
+    @ocs_agent.param('p', type=float)
+    @ocs_agent.param('i', type=float)
+    @ocs_agent.param('d', type=float)
+    def set_pid(self, session, params):
+    	self.driver.set_pid(params['p'], params['i'], params['d'])
+    	return True, {'P': params['p'], 'I': params['i'], 'D': params['d']}
+
+    @ocs_agent.param('temp', type=float)
+    def set_setpoint(self, session, params):
+        self.driver.set_setpoint(params['temp'])
+        return True, {'setpoint': params['temp']}
+
+    def enable_control_loop(self, session, params=None):
+        self.driver.enable_control_loop()
+        return True, {'status': 'enabled'}
+
     
     
 def make_parser(parser=None):
@@ -293,6 +329,12 @@ def main(args=None):
     agent.register_task('get_heater_units', ls325_agent.get_heater_units)
     agent.register_task('set_heater_units', ls325_agent.set_heater_units)
     # And many more to come...
+    agent.register_task('get_temperature', ls325_agent.get_temperature)
+    agent.register_task('set_heater_range', ls325_agent.set_heater_range)
+    agent.register_task('set_heater_power', ls325_agent.set_heater_power)
+    agent.register_task('set_pid', ls325_agent.set_pid)
+    agent.register_task('set_setpoint', ls325_agent.set_setpoint)
+    agent.register_task('enable_control_loop', ls325_agent.enable_control_loop)
 
     runner.run(agent, auto_reconnect=True)
 

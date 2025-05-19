@@ -102,7 +102,7 @@ class LS325_Agent:
                                  agg_params=agg_params,
                                  buffer_time=1)
         
-    
+    @ocs_agent.param('auto_acquire', default=False, type=bool)
     def init_ls325(self, session, params=None):
         """init_bftc(auto_acquire=False, acq_params=None)
         
@@ -128,7 +128,10 @@ class LS325_Agent:
                 self.log.warn(f"Could not start init because "
                               f"{self._lock.job} is already running")
                 return False, "Could not acquire lock"  
-                  
+            if not acquired2:
+                self.log.warn(f"Could not start init because "
+                              f"{self._acq_proc_lock.job} is already running")
+                return False, "Could not acquire lock"
         session.set_status('running')
         
         try:
@@ -147,8 +150,9 @@ class LS325_Agent:
 
         self.initialized = True
 
-        if params.get('auto_acquire', False):
-            self.agent.start('acq', params.get('acq_params', None))
+         # Start data acquisition if requested
+        if params['auto_acquire']:
+            self.agent.start('acq')
 
         return True, 'LS325 initialized.'
         
@@ -162,67 +166,58 @@ class LS325_Agent:
                 self.log.warn(f"Could not start Process because "
                               f"{self._acq_proc_lock.job} is already running")
                 return False, "Could not acquire lock"
+            if not acquired:
+                self.log.warn(f"Could not start Process because "
+                              f"{self._lock.job} is holding the lock")
+                return False, "Could not acquire lock"
 
             session.set_status('running')
             self.log.info("Starting data acquisition for {}".format(self.agent.agent_address))
-            previous_timestamp = None
             last_release = time.time()
-
+            last_publish = 0
             session.data = {"fields": {}}
 
             self.take_data = True
             
+            def read_and_publish(channel, label):
+                try:
+                    res = float(channel.get_resistance())
+                    temp = float(channel.get_kelvin_reading())
+                    timestamp = time.time()
+
+                    data = {
+                        'timestamp': timestamp,
+                        'block_name': label,
+                        'data': {
+                            f'{label}_R': res,
+                            f'{label}_T': temp
+                        }
+                    }
+                    session.app.publish_to_feed('temperatures', data)
+                    session.data['fields'][label] = {
+                        'R': res, 'T': temp, 'timestamp': timestamp
+                    }
+                except Exception as e:
+                    self.log.warn(f"Failed to read/publish from {label}: {e}")
+                      
             while self.take_data:
-                res_reading = float(self.module.channel_A.get_resistance())
-                temp_reading = float(self.module.channel_A.get_kelvin_reading())
-                current_time_A = time.time()
-                channel_str = 'Channel_A'
-                
-                # Setup feed dictionary
-                data = {
-                    'timestamp': current_time_A,
-                    'block_name': channel_str,
-                    'data': {}
-                }
-
-                data['data'][channel_str + '_R'] = res_reading
-                data['data'][channel_str + '_T'] = temp_reading
-                
-                session.app.publish_to_feed('temperatures', data)
-                self.log.debug("{data}", data=session.data)
-                
-                # For session.data
-                field_dict = {channel_str: {"R": res_reading, "T" : temp_reading,
-                                            "timestamp": current_time_A}}
-                session.data['fields'].update(field_dict)
-             
-                time.sleep(.1)
-                
-                res_reading = float(self.module.channel_B.get_resistance())
-                temp_reading = float(self.module.channel_B.get_kelvin_reading())
-                current_time_B = time.time()
-                channel_str = 'Channel_B'
-                
-                # Setup feed dictionary
-                data = {
-                    'timestamp': current_time_B,
-                    'block_name': channel_str,
-                    'data': {}
-                }
-
-                data['data'][channel_str + '_R'] = res_reading
-                data['data'][channel_str + '_T'] = temp_reading
-                
-                session.app.publish_to_feed('temperatures', data)
-                self.log.debug("{data}", data=session.data)
-                
-                # For session.data
-                field_dict = {channel_str: {"R": res_reading, "T" : temp_reading,
-                                            "timestamp": current_time_B}}
-                session.data['fields'].update(field_dict)
-                
-                time.sleep(2)
-                
+            
+                # Relinquish sampling lock occasionally.
+                if time.time() - last_release > 1.:
+                    last_release = time.time()
+                    if not self._lock.release_and_acquire(timeout=10):
+                        self.log.warn(f"Failed to re-acquire sampling lock, "
+                                      f"currently held by {self._lock.job}.")
+                        continue
+                        
+                if time.time() - last_publish >= 20:      
+                    read_and_publish(self.module.channel_A, 'Channel_A')
+                    time.sleep(0.1)
+                    read_and_publish(self.module.channel_B, 'Channel_B')
+                    last_publish = time.time()
+                    
+                time.sleep(0.5)
+                    
         return True, 'Acquisition exited cleanly.'                 
     
     def _stop_acq(self, session, params=None):
@@ -248,9 +243,21 @@ class LS325_Agent:
         
     @ocs_agent.param('channel', type=str)
     def get_temperature(self, session, params):
-    	T = self.driver.get_temperature(params['channel'])
-    	return True, {'temperature': T}
-
+        with self._lock.acquire_timeout(job='set_excitation_mode') as acquired:
+            if not acquired:
+                self.log.warn(f"Could not start Task because "
+                              f"{self._lock.job} is already running")
+                return False, "Could not acquire lock"
+                
+        if params['channel'].upper() == 'A':
+    	    temp = self.module.channel_A.get_kelvin_reading()
+    	    return True, f"Channel_A: {temp}"
+        if params['channel'].upper() == 'B':
+    	    temp = self.module.channel_B.get_kelvin_reading()
+    	    return True, f"Channel_B: {temp}"
+        else:
+    	    return False, "Invalid channel selected"
+    	    
     @ocs_agent.param('rng', type=int)
     def set_heater_range(self, session, params):
     	self.driver.set_heater_range(params['rng'])
@@ -291,9 +298,8 @@ def make_parser(parser=None):
     pgroup = parser.add_argument_group('Agent Options')
     pgroup.add_argument('--port')
     pgroup.add_argument('--serial-number')
-    pgroup.add_argument('--mode', type=str, default='acq',
-                        choices=['idle', 'init', 'acq'],
-                        help="Starting action for the Agent.")
+    pgroup.add_argument('--auto-acquire', type=bool, default=False,
+                        help='Automatically start data acquisition on startup')
     return parser
 
 
@@ -310,13 +316,10 @@ def main(args=None):
                                   parser=parser,
                                   args=args)
 
+    # Automatically acquire data if requested (default)
     init_params = False
-    if args.mode == 'init':
-        init_params = {'auto_acquire': False,
-                       'acq_params': {}}
-    elif args.mode == 'acq':
-        init_params = {'auto_acquire': True,
-                       'acq_params': {}}
+    if args.auto_acquire:
+        init_params = {'auto_acquire': True}
 
     # Interpret options in the context of site_config.
     print('I am in charge of device with serial number: %s' % args.serial_number)
@@ -325,7 +328,7 @@ def main(args=None):
 
     ls325_agent = LS325_Agent(agent, args.serial_number, args.port)
     agent.register_process('acq', ls325_agent.acq, ls325_agent._stop_acq)
-    agent.register_task('init_ls325', ls325_agent.init_ls325)
+    agent.register_task('init_ls325', ls325_agent.init_ls325, startup=init_params)
     agent.register_task('get_heater_units', ls325_agent.get_heater_units)
     agent.register_task('set_heater_units', ls325_agent.set_heater_units)
     # And many more to come...

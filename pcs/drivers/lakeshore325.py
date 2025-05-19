@@ -24,7 +24,28 @@ format_lock = {"mV/K": '1',
                "V/K": '2',
                "Ohm/K": '3',
                "log(Ohm)/K": '4'}
-               
+HTRRES_key = {1: 25,
+              2: 50}
+HTRRES_lock = {25: 1,
+               50: 2}
+RANGE_1_key = {0: "OFF", 
+               1: "LOW", 
+               2: "HIGH"}
+RANGE_1_lock = {"OFF": 0,
+                "LOW": 1,
+                "HIGH": 2}
+CMODE_lock = {"Manual PID": 1, 
+             "Zone": 2,
+             "Open Loop": 3,
+             "AutoTune PID": 4,
+             "AutoTune PI": 5,
+             "AutoTune P": 6}
+CMODE_key = {1: "Manual PID",
+              2: "Zone",
+              3: "Open Loop",
+              4: "AutoTune PID",
+              5: "AutoTune PI",
+              6: "AutoTune P"}    
 class LS325:
     """
         Lakeshore 325 class.
@@ -46,8 +67,8 @@ class LS325:
         self.id = self.get_id()
         self.channel_A = Channel(self, 'A')
         self.channel_B = Channel(self, 'B')
-        self.heater_1 = Heater(self, 1)
-        self.heater_2 = Heater(self, 2)
+        self.loop_1 = Heater(self, 1)
+        self.loop_2 = Heater(self, 2)
         
 
     def msg(self, message):
@@ -165,17 +186,11 @@ class Heater:
     :type ls: Lakeshore370.LS370
     """
 
-    def __init__(self, ls, heater_id):
+    def __init__(self, ls, loop_id):
         self.ls = ls
-        self.id = heater_id
-        self.mode = None
-        self.input = None
-        self.powerup = None 
-        self.units = None
-
+        self.id = loop_id
         self.range = None
-        self.resistance = None  # only for output = 0
-        self.display = None
+        self.resistance = None 
         
     def get_units(self):
         """Get the setpoint units with the CSET? command.
@@ -194,8 +209,96 @@ class Heater:
         """
         self.ls.msg(resp)
         return self.get_units()
+    
+    def set_resistance(self, ohms):
+        if ohms not in HTRRES_lock:
+            raise ValueError(f"Invalid heater resistance value: {ohms}. Must be one of {list(HTRRES_lock.keys())}")
         
+        response = self.ls.msg(f"HTRRES {self.id},{HTRRES_lock[ohms]}")
+        self.resistance = ohms
+        return response
+        
+    def get_resistance(self):
+        return self.resistance
+    
+    def set_range(self, loop_range):
+        range_locks = {1: RANGE_1_lock, 2: RANGE_2_lock}
+        
+        loop_range = loop_range.upper()
+        lock_dict = range_locks[self.id]
+        valid_keys = {key.upper(): key for key in lock_dict}
 
+        if loop_range not in valid_keys:
+            raise ValueError(f"Invalid heater range: {loop_range}. Must be one of {list(lock_dict.keys())}")
+
+        response = self.ls.msg(f"RANGE {self.id},{lock_dict[loop_range]}")
+        self.range = loop_range
+        return response
+        
+    def get_range(self):
+         return self.range
+         
+    def set_control_input(self, channel):
+        channel = channel.upper()
+        if channel is not 'A' or 'B':
+            raise ValueError(f"Invalid channel: {channel}. Must be A or B")
+            
+        return self.ls.msg(f"CSET {self.id},{channel},1,0,2")
+        
+    def get_control_input(self):
+        response = self.ls.msg(f"CSET? {self.id}").split(",")
+        channel = response[0].upper
+        return channel
+    
+    def set_setpoint(self, temp):
+        temp = float(temp)
+        return self.ls.msg(f"SETP {self.id},{temp}")
+        
+    def get_setpoint(self):
+        return self.ls.msg(f"SETP? {self.id}")
+    
+    def set_mode(self, mode):
+        mode = mode.upper()
+        valid_keys = {key.upper(): key for key in CMODE_lock}
+        if mode not in valid_keys:
+            raise ValueError(f"Invalid mode: {mode}. Must be one of {list(CMODE_lock.keys())}")
+        
+        return self.ls.msg(f"CMODE {self.id},{valid_keys[mode]}")
+
+    def get_mode(self):
+        response = self.ls.msg(f"CMODE? {self.id}")
+        return CMODE_key[response]
+        
+    def set_pid(self, p, i, d):
+        """Set PID parameters for closed loop control.
+
+        :params p: proportional term in PID loop
+        :type p: float
+        :params i: integral term in PID loop
+        :type i: float
+        :params d: derivative term in PID loop
+        :type d: float
+
+        :returns: response from PID command
+        :rtype: str
+        """
+        assert float(p) <= 1000 and float(p) >= 0
+        assert float(i) <= 10000 and float(i) >= 0
+        assert float(d) <= 2500 and float(d) >= 0
+
+        resp = self.ls.msg(f"PID {self.id},{p},{i},{d}")
+        return resp
+
+    
+    def get_pid(self):
+        """Get PID parameters with PID? command.
+
+        :returns: p, i, d
+        :rtype: float, float, float
+        """
+        resp = self.ls.msg("PID? {self.id}").split(',')
+        return float(resp[0]), float(resp[1]), float(resp[2])
+        
 class Curve:
 
     def __init__(self, ls, curve_num):

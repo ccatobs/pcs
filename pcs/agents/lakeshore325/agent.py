@@ -231,19 +231,10 @@ class LS325_Agent:
         else:
             return False, 'acq is not currently running'
                         
-    @ocs_agent.param('value',type=str)    
-    def set_heater_units(self, session, params=None):
-        self.module.heater1.set_units(params['value'])
-        return True, 'Heater 1 units set'
-        
-    @ocs_agent.param('_')    
-    def get_heater_units(self, session, params=None):
-        resp = self.module.heater1.get_units()
-        return True, resp
         
     @ocs_agent.param('channel', type=str)
     def get_temperature(self, session, params):
-        with self._lock.acquire_timeout(job='set_excitation_mode') as acquired:
+        with self._lock.acquire_timeout(job='get_temperature') as acquired:
             if not acquired:
                 self.log.warn(f"Could not start Task because "
                               f"{self._lock.job} is already running")
@@ -257,35 +248,131 @@ class LS325_Agent:
     	    return True, f"Channel_B: {temp}"
         else:
     	    return False, "Invalid channel selected"
-    	    
-    @ocs_agent.param('rng', type=int)
-    def set_heater_range(self, session, params):
-    	self.driver.set_heater_range(params['rng'])
-    	return True, {'range': params['rng']}
+    
+    @ocs_agent.param('loop', type=int, check=lambda x: x in (1,2))	    
+    @ocs_agent.param('temp', type=float, check=lambda x: x < 20)
+    @ocs_agent.param('channel', type=str, check=lambda x: x.upper() in ('A','B'))
+    def servo_to_temperature(self, session, params):
+        """servo_to_temperature(temperature, channel=None)
 
-    @ocs_agent.param('percent', type=float)
-    def set_heater_power(self, session, params):
-    	self.driver.set_heater_power(params['percent'])
-    	return True, {'power': params['percent']}
-    	
-    @ocs_agent.param('p', type=float)
-    @ocs_agent.param('i', type=float)
-    @ocs_agent.param('d', type=float)
+        **Task** - Servo to a given temperature using a closed loop PID on a
+        fixed channel. This will automatically disable autoscan if enabled.
+
+        Parameters:
+            temperature (float): Temperature to servo to in units of Kelvin.
+            channel (int, optional): Channel to servo off of.
+
+        """
+        with self._lock.acquire_timeout(job='servo_to_temperature') as acquired:
+            if not acquired:
+                self.log.warn(f"Could not start Task because "
+                              f"{self._lock.job} is already running")
+                return False, "Could not acquire lock"
+
+            
+            if params['loop'] == 1:
+                loop_obj = self.module.loop_1
+            if params['loop'] == 2:
+                loop_obj = self.module.loop_2
+                
+            # Check we're in correct control mode for servo.    
+            if loop_obj.get_mode().upper() != 'MANUAL PID':
+                session.add_message('Changing control to Manual PID Loop mode for servo.')
+                loop_obj.set_mode("Manual PID")
+            else:
+                session.add_message(f'Loop_{params["loop"]} is already set to Manual PID mode.')
+
+            # Check to see if we passed an input channel, and if so change to it
+            if loop_obj.get_control_input() != params['channel'].upper():
+                session.add_message(f'Changing loop input channel to {params["channel"].upper()}')
+                loop_obj.set_control_input(params["channel"])
+            else:
+                session.add_message(f'Loop_{params["loop"]} input channel is already {params["channel"].upper()}')
+
+            # Check we're setup to take correct units.
+            if loop_obj.get_units().upper() != 'KELVIN':
+                session.add_message('Setting preferred units to Kelvin on heater control.')
+                loop_obj.set_units('kelvin')
+
+            loop_obj.set_setpoint(params["temp"])
+            resp = loop_obj.get_setpoint()
+        return True, f'Setpoint now set to {resp} K'  
+ 	
+    @ocs_agent.param('loop', type=int, check=lambda x: x in (1,2))	    
+    @ocs_agent.param('range', type=str, check=lambda x: x.upper() in ('ON', 'OFF', 'LOW', 'HIGH'))
+    @ocs_agent.param('resistance', type=int, check=lambda x: (25,50))    
+    def init_heater(self, session, params):
+    
+        with self._lock.acquire_timeout(job='init_heater') as acquired:
+            if not acquired:
+                self.log.warn(f"Could not start Task because "
+                              f"{self._lock.job} is already running")
+                return False, "Could not acquire lock"
+            
+            
+            if params['loop'] == 1:
+               loop_obj = self.module.loop_1
+            if params['loop'] == 2:
+               loop_obj = self.module.loop_2
+            
+            if loop_obj.get_range().upper() != params['range'].upper():
+               session.add_message(f'Changing heater range to {params["range"]}')
+               loop_obj.set_range(params["range"])
+            else:
+                session.add_message(f'Heater range is already {params["range"]}')
+             
+            if (loop_obj.get_resistance()) != params['resistance']:
+               session.add_message(f'Changing heater resistance to {params["resistance"]} ohms')
+               loop_obj.set_resistance(params['resistance'])
+            else:
+                session.add_message(f'Heater resistance is already set to {params["resistance"]} ohms')
+               
+        return True, f'Loop_{params["loop"]} heater initialized succesfully'
+        
+    @ocs_agent.param('loop', type=int, check=lambda x: x in (1,2)) 
+    @ocs_agent.param('p', type=float, check=lambda x: x <= 1000 and x >= 0)
+    @ocs_agent.param('i', type=float, check=lambda x: x <= 1000 and x >= 1)
+    @ocs_agent.param('d', type=float, check=lambda x: x <= 200 and x >= 1)
     def set_pid(self, session, params):
-    	self.driver.set_pid(params['p'], params['i'], params['d'])
-    	return True, {'P': params['p'], 'I': params['i'], 'D': params['d']}
+        with self._lock.acquire_timeout(job='set_pid') as acquired:
+            if not acquired:
+                self.log.warn(f"Could not start Task because "
+                              f"{self._lock.job} is already running")
+                return False, "Could not acquire lock"
+                
+            if params['loop'] == 1:
+               loop_obj = self.module.loop_1
+            if params['loop'] == 2:
+               loop_obj = self.module.loop_2
+               
+            loop_obj.set_pid(params["p"], params["i"], params["d"])
+            resp = loop_obj.get_pid()
 
-    @ocs_agent.param('temp', type=float)
+        return True, f'Set PID to {resp[0]}, {resp[1]}, {resp[2]}'
+    
+    @ocs_agent.param('loop', type=int, check=lambda x: x in (1,2))	    
+    @ocs_agent.param('temp', type=float, check=lambda x: x < 20)
     def set_setpoint(self, session, params):
-        self.driver.set_setpoint(params['temp'])
-        return True, {'setpoint': params['temp']}
+        with self._lock.acquire_timeout(job='set_setpoint') as acquired:
+            if not acquired:
+                self.log.warn(f"Could not start Task because "
+                              f"{self._lock.job} is already running")
+                return False, "Could not acquire lock"
+                
+            if params['loop'] == 1:
+               loop_obj = self.module.loop_1
+            if params['loop'] == 2:
+               loop_obj = self.module.loop_2
+               
+            # Check we're setup to take correct units.
+            if loop_obj.get_units().upper() != 'KELVIN':
+                session.add_message('Setting preferred units to Kelvin on heater control.')
+                loop_obj.set_units('kelvin')   
+            loop_obj.set_setpoint(params['temp'])
+            resp = loop_obj.get_setpoint()
+            
+        return True, f'Setpoint now set to {resp} K'
 
-    def enable_control_loop(self, session, params=None):
-        self.driver.enable_control_loop()
-        return True, {'status': 'enabled'}
-
-    
-    
 def make_parser(parser=None):
     """Build the argument parser for the Agent. Allows sphinx to automatically
     build documentation based on this function.
@@ -329,15 +416,11 @@ def main(args=None):
     ls325_agent = LS325_Agent(agent, args.serial_number, args.port)
     agent.register_process('acq', ls325_agent.acq, ls325_agent._stop_acq)
     agent.register_task('init_ls325', ls325_agent.init_ls325, startup=init_params)
-    agent.register_task('get_heater_units', ls325_agent.get_heater_units)
-    agent.register_task('set_heater_units', ls325_agent.set_heater_units)
-    # And many more to come...
     agent.register_task('get_temperature', ls325_agent.get_temperature)
-    agent.register_task('set_heater_range', ls325_agent.set_heater_range)
-    agent.register_task('set_heater_power', ls325_agent.set_heater_power)
+    agent.register_task('init_heater', ls325_agent.init_heater)
+    agent.register_task('servo_to_temperature', ls325_agent.servo_to_temperature)
     agent.register_task('set_pid', ls325_agent.set_pid)
     agent.register_task('set_setpoint', ls325_agent.set_setpoint)
-    agent.register_task('enable_control_loop', ls325_agent.enable_control_loop)
 
     runner.run(agent, auto_reconnect=True)
 

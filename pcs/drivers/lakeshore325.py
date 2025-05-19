@@ -3,49 +3,49 @@ import time
 import numpy as np
 import serial
 
-units_key = {'1': 'kelvin',
-             '2': 'ohms'}
+units_key = {'1': 'Kelvin',
+             '2': 'Celcius',
+             '3': 'Sensor'}
 
-units_lock = {'kelvin': '1',
-              'ohms': '2'}
-              
-tempco_key = {'1': 'negative',
-              '2': 'positive'}
-
-tempco_lock = {'negative': '1',
-               'positive': '2'}
+units_lock = {'Kelvin': 1,
+              'Celcius': 2,
+              'Sensor': 3}
 
 format_key = {'1': "mV/K",
               '2': "V/K",
               '3': "Ohm/K",
               '4': "log(Ohm)/K"}
 
-format_lock = {"mV/K": '1',
-               "V/K": '2',
-               "Ohm/K": '3',
-               "log(Ohm)/K": '4'}
-HTRRES_key = {1: 25,
-              2: 50}
+format_lock = {"mV/K": 1,
+               "V/K": 2,
+               "Ohm/K": 3,
+               "log(Ohm)/K": 4}
+HTRRES_key = {'1': 25,
+              '2': 50}
 HTRRES_lock = {25: 1,
                50: 2}
-RANGE_1_key = {0: "OFF", 
-               1: "LOW", 
-               2: "HIGH"}
+RANGE_1_key = {'0': "OFF", 
+               '1': "LOW", 
+               '2': "HIGH"}
 RANGE_1_lock = {"OFF": 0,
                 "LOW": 1,
                 "HIGH": 2}
+RANGE_2_key = {'0': "OFF", 
+               '1': "ON"}
+RANGE_2_lock = {"OFF": 0,
+                "ON": 1}
 CMODE_lock = {"Manual PID": 1, 
              "Zone": 2,
              "Open Loop": 3,
              "AutoTune PID": 4,
              "AutoTune PI": 5,
              "AutoTune P": 6}
-CMODE_key = {1: "Manual PID",
-              2: "Zone",
-              3: "Open Loop",
-              4: "AutoTune PID",
-              5: "AutoTune PI",
-              6: "AutoTune P"}    
+CMODE_key = {'1': "Manual PID",
+              '2': "Zone",
+              '3': "Open Loop",
+              '4': "AutoTune PID",
+              '5': "AutoTune PI",
+              '6': "AutoTune P"}    
 class LS325:
     """
         Lakeshore 325 class.
@@ -173,42 +173,33 @@ class Channel:
         return self.ls.msg(F'INCRV? {self.name}')
 
 
-    #RDGST  
-        
         
         
         
 
 class Heater:
-    """Heater class for LS370 control
-
-    :param ls: the lakeshore object we're controlling
-    :type ls: Lakeshore370.LS370
-    """
 
     def __init__(self, ls, loop_id):
         self.ls = ls
         self.id = loop_id
         self.range = None
         self.resistance = None 
+
         
     def get_units(self):
-        """Get the setpoint units with the CSET? command.
+    
+        resp = self.ls.msg("CSET?").split(",")
+        units = units_key[resp[1]]
+        return units
 
-        :returns: units, either 'kelvin' or 'ohms'
-        :rtype: str
-        """
-        resp = self.ls.msg("CSET?")
-        return resp
-
-    def set_units(self, resp):
-        """Set the setpoint units with the CSET command.
-
-        :param units: units, either 'kelvin' or 'ohms'
-        :type units: str
-        """
-        self.ls.msg(resp)
-        return self.get_units()
+    def set_units(self, units):
+    
+        valid_keys = {key.upper(): key for key in units_lock}
+        if units.upper() not in valid_keys:
+            raise ValueError(f"Invalid unit type: {units}. Must be one of {list(units_lock.keys())}")
+        units_int = valid_keys[units.upper()]
+        channel = self.get_control_input()
+        return self.ls.msg(f"CSET {self.id},{channel},{units_int},0,2")
     
     def set_resistance(self, ohms):
         if ohms not in HTRRES_lock:
@@ -219,7 +210,9 @@ class Heater:
         return response
         
     def get_resistance(self):
-        return self.resistance
+        resp = self.ls.msg(f"HTRRES? {self.id}")
+        resistance = HTRRES_key[resp]
+        return resistance
     
     def set_range(self, loop_range):
         range_locks = {1: RANGE_1_lock, 2: RANGE_2_lock}
@@ -236,12 +229,16 @@ class Heater:
         return response
         
     def get_range(self):
-         return self.range
+        range_keys = {1: RANGE_1_key, 2: RANGE_2_key}
+        key_dict = range_keys[self.id]
+        resp = self.ls.msg(f"RANGE? {self.id}")
+        loop_range = key_dict[resp]
+        return loop_range
          
     def set_control_input(self, channel):
         channel = channel.upper()
-        if channel is not 'A' or 'B':
-            raise ValueError(f"Invalid channel: {channel}. Must be A or B")
+        if channel not in ('A', 'B'):
+            raise ValueError(f"Invalid channel ({channel}) Must be A or B")
             
         return self.ls.msg(f"CSET {self.id},{channel},1,0,2")
         
@@ -255,7 +252,12 @@ class Heater:
         return self.ls.msg(f"SETP {self.id},{temp}")
         
     def get_setpoint(self):
-        return self.ls.msg(f"SETP? {self.id}")
+        resp =self.ls.msg(f"SETP? {self.id}")
+        clean = ''.join(c for c in resp if c.isdigit() or c in ['.', '-', '+'])
+        num = float(clean)
+        num = f"{num:.3f}"
+                
+        return num
     
     def set_mode(self, mode):
         mode = mode.upper()
@@ -270,34 +272,27 @@ class Heater:
         return CMODE_key[response]
         
     def set_pid(self, p, i, d):
-        """Set PID parameters for closed loop control.
-
-        :params p: proportional term in PID loop
-        :type p: float
-        :params i: integral term in PID loop
-        :type i: float
-        :params d: derivative term in PID loop
-        :type d: float
-
-        :returns: response from PID command
-        :rtype: str
-        """
+    
         assert float(p) <= 1000 and float(p) >= 0
-        assert float(i) <= 10000 and float(i) >= 0
-        assert float(d) <= 2500 and float(d) >= 0
+        assert float(i) <= 1000 and float(i) >= 1
+        assert float(d) <= 200 and float(d) >= 1
 
         resp = self.ls.msg(f"PID {self.id},{p},{i},{d}")
         return resp
 
     
     def get_pid(self):
-        """Get PID parameters with PID? command.
-
-        :returns: p, i, d
-        :rtype: float, float, float
-        """
         resp = self.ls.msg("PID? {self.id}").split(',')
-        return float(resp[0]), float(resp[1]), float(resp[2])
+        formatted = []
+        for val in resp:
+            try:
+                clean = ''.join(c for c in val if c.isdigit() or c in ['.', '-', '+'])
+                num = float(clean)
+                formatted.append(f"{num:.1f}")  # Keep one decimal place
+            except ValueError:
+                formatted.append('Invalid')
+                
+        return formatted[0], formatted[1], formatted[2]
         
 class Curve:
 

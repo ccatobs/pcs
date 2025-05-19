@@ -165,8 +165,9 @@ class Bluefors_CU_Agent:
             self.initialized = True
 
         # Start data acquisition if requested
-        if params.get('auto_acquire', False):
-            self.agent.start('acq', params.get('acq_params', None))
+        if params['auto_acquire']:
+            self.agent.start('acq')
+
 
         return True, 'BF CU initialized.'
         
@@ -260,9 +261,8 @@ def make_parser(parser=None):
     pgroup = parser.add_argument_group('Agent Options')
     pgroup.add_argument('--ip-address')
     pgroup.add_argument('--key')
-    pgroup.add_argument('--mode', type=str, default='acq',
-                        choices=['idle', 'init', 'acq'],
-                        help="Starting action for the Agent.")
+    pgroup.add_argument('--auto-acquire', type=bool, default=False,
+                        help='Automatically start data acquisition on startup')
 
     return parser
 
@@ -280,14 +280,10 @@ def main(args=None):
                                   parser=parser,
                                   args=args)
 
-    # Automatically acquire data if requested (default)
+   # Automatically acquire data if requested (default)
     init_params = False
-    if args.mode == 'init':
-        init_params = {'auto_acquire': False,
-                       'acq_params': {}}
-    elif args.mode == 'acq':
-        init_params = {'auto_acquire': True,
-                       'acq_params': {}}
+    if args.auto_acquire:
+        init_params = {'auto_acquire': True}
 
     # Interpret options in the context of site_config.
     #print('I am in charge of device with serial number: %s' % args.serial_number)

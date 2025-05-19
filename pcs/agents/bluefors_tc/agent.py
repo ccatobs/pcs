@@ -428,7 +428,7 @@ def main(args=None):
 
     agent.register_task('init_bftc', bftc_agent.init_bftc,
                         startup=init_params)
-    agent.register_task('set_setpoint', bftc_agent.set_pid_setpoint)
+    agent.register_task('set_setpoint', bftc_agent.set_setpoint)
     agent.register_task('set_heater_power', bftc_agent.set_heater_power)
     agent.register_task('heater_switch', bftc_agent.heater_switch)
     agent.register_process('acq', bftc_agent.acq, bftc_agent._stop_acq)

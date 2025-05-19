@@ -114,7 +114,7 @@ class Bluefors_TC_Agent:
                                  agg_params=agg_params,
                                  buffer_time=1)
 
-    @ocs_agent.param('auto_acquire', default=False, type=bool)
+    @ocs_agent.param('auto_acquire',type=bool, default=False)
     @ocs_agent.param('acq_params', type=dict, default=None)
     def init_bftc(self, session, params=None):
         """init_bftc(auto_acquire=False, acq_params=None)
@@ -166,8 +166,8 @@ class Bluefors_TC_Agent:
             self.initialized = True
 
         # Start data acquisition if requested
-        if params.get('auto_acquire', False):
-            self.agent.start('acq', params.get('acq_params', None))
+        if params['auto_acquire']:
+            self.agent.start('acq')
 
         return True, 'BF TC initialized.'
     
@@ -358,9 +358,9 @@ class Bluefors_TC_Agent:
     
     @ocs_agent.param('heater', type=str, choices=['sample', 'still'])
     @ocs_agent.param('temp', type=float)        
-    def set_pid_setpoint(self, session, params=None):
+    def set_setpoint(self, session, params=None):
 
-        with self._lock.acquire_timeout(job='set_pid_setpoint') as acquired:
+        with self._lock.acquire_timeout(job='set_setpoint') as acquired:
             if not acquired:
                 self.log.warn(f"Could not start Task because "
                               f"{self._lock.job} is already running")
@@ -396,9 +396,7 @@ def make_parser(parser=None):
     pgroup = parser.add_argument_group('Agent Options')
     pgroup.add_argument('--ip-address')
     pgroup.add_argument('--serial-number')
-    pgroup.add_argument('--mode', type=str, default='acq',
-                        choices=['idle', 'init', 'acq'],
-                        help="Starting action for the Agent.")
+    pgroup.add_argument('--auto-acquire', type=bool, default=False)
 
     return parser
 
@@ -416,14 +414,10 @@ def main(args=None):
                                   parser=parser,
                                   args=args)
 
-    # Automatically acquire data if requested (default)
+    # Automatically acquire data if requested
     init_params = False
-    if args.mode == 'init':
-        init_params = {'auto_acquire': False,
-                       'acq_params': {}}
-    elif args.mode == 'acq':
-        init_params = {'auto_acquire': True,
-                       'acq_params': {}}
+    if args.auto_acquire:
+        init_params = {'auto_acquire': True}
 
     # Interpret options in the context of site_config.
     print('I am in charge of device with serial number: %s' % args.serial_number)
@@ -434,9 +428,9 @@ def main(args=None):
 
     agent.register_task('init_bftc', bftc_agent.init_bftc,
                         startup=init_params)
-    agent.register_task('set_pid_setpoint', bftc_agent.set_pid_setpoint, startup=init_params)
-    agent.register_task('set_heater_power', bftc_agent.set_heater_power, startup=init_params)
-    agent.register_task('heater_switch', bftc_agent.heater_switch, startup=init_params)
+    agent.register_task('set_setpoint', bftc_agent.set_pid_setpoint)
+    agent.register_task('set_heater_power', bftc_agent.set_heater_power)
+    agent.register_task('heater_switch', bftc_agent.heater_switch)
     agent.register_process('acq', bftc_agent.acq, bftc_agent._stop_acq)
     # And many more to come...
 

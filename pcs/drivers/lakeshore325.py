@@ -276,9 +276,9 @@ class Heater:
         
     def set_pid(self, p, i, d):
     
-        assert float(p) <= 1000 and float(p) > 0
-        assert float(i) <= 1000 and float(i) > 0
-        assert float(d) <= 200 and float(d) > 0
+        assert float(p) <= 1000 and float(p) >= 0
+        assert float(i) <= 1000 and float(i) >= 0
+        assert float(d) <= 200 and float(d) >= 0
 
         resp = self.ls.msg(f"PID {self.id},{p},{i},{d}")
         return resp

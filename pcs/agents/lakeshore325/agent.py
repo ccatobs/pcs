@@ -331,8 +331,8 @@ class LS325_Agent:
         
     @ocs_agent.param('loop', type=int, check=lambda x: x in (1,2)) 
     @ocs_agent.param('p', type=float, check=lambda x: x <= 1000 and x >= 0)
-    @ocs_agent.param('i', type=float, check=lambda x: x <= 1000 and x >= 1)
-    @ocs_agent.param('d', type=float, check=lambda x: x <= 200 and x >= 1)
+    @ocs_agent.param('i', type=float, check=lambda x: x <= 1000 and x >= 0)
+    @ocs_agent.param('d', type=float, check=lambda x: x <= 200 and x >= 0)
     def set_pid(self, session, params):
         with self._lock.acquire_timeout(job='set_pid') as acquired:
             if not acquired:

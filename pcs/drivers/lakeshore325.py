@@ -149,8 +149,11 @@ class Channel:
         return self.ls.msg(F'CRDG? {self.name}')
         
     def get_kelvin_reading(self):
-        #KRDG? Kelvin Reading Query
-        return self.ls.msg(F'KRDG? {self.name}')
+        resp =self.ls.msg(F'KRDG? {self.name}')
+        clean = ''.join(c for c in resp if c.isdigit() or c in ['.', '-', '+'])
+        num = float(clean)
+        num = f"{num:.3f}"
+        return num
 
     def set_temp_limit(self, templim):
         #Temperature Limit Command  
@@ -273,9 +276,9 @@ class Heater:
         
     def set_pid(self, p, i, d):
     
-        assert float(p) <= 1000 and float(p) >= 0
-        assert float(i) <= 1000 and float(i) >= 1
-        assert float(d) <= 200 and float(d) >= 1
+        assert float(p) <= 1000 and float(p) > 0
+        assert float(i) <= 1000 and float(i) > 0
+        assert float(d) <= 200 and float(d) > 0
 
         resp = self.ls.msg(f"PID {self.id},{p},{i},{d}")
         return resp
@@ -616,33 +619,4 @@ class Curve:
 
         return string
 
-    def get_temperature(self, channel: str) -> float:
-        """Read temperature in Kelvin from channel A or B."""
-        resp = self.ls.msg(f"KRDG? {channel.upper()}")
-        return float(resp.strip())
-
-    def set_heater_range(self, rng: int) -> None:
-        """Set heater output range: 0=off, 1=low, 2=med, 3=high."""
-        self.ls.msg(f"RANGE {rng}")
-
-    def set_heater_power(self, percent: float) -> None:
-        """Set heater output power manually as a percentage."""
-        self.ls.msg(f"MOUT 1,{percent}")
-
-    def set_pid(self, p: float, i: float, d: float) -> None:
-        """Set PID parameters for control loop 1."""
-        self.ls.msg(f"PID 1,{p},{i},{d}")
-
-    def set_setpoint(self, temp: float) -> None:
-        """Set the desired control loop setpoint (in Kelvin)."""
-        self.ls.msg(f"SETP 1,{temp}")
-
-    def enable_control_loop(self) -> None:
-        """
-        Configure loop 1:
-        - Input A
-        - Units: Kelvin (1)
-        - Enabled at power-up
-        - Power-based control
-        """
-        self.ls.msg("CSET 1,A,1,1,2")
+   

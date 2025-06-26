@@ -134,10 +134,19 @@ class ColdloadAgent_ScpiPsu(ScpiPsuAgent):
     # Overload ScpiPsuAgent Methods #
     #===============================#
 
+    def get_output(self, session, params):
+        """get_output()
+
+        **Task** - Get whether the channel connected to the coldload is on or off.
+        
+        """
+        params['channel'] = self.psu_channel
+        return super().get_output(session, params=params)
+
     def get_voltage(self, session, params):
         """get_voltage()
 
-        **Task** - Get the voltaeg of the coldload. 
+        **Task** - Get the voltage of the coldload. 
         
         """
         params['channel'] = self.psu_channel
@@ -151,6 +160,19 @@ class ColdloadAgent_ScpiPsu(ScpiPsuAgent):
         """
         params['channel'] = self.psu_channel
         return super().get_current(session, params=params)
+
+    @ocs_agent.param('state', type=bool)
+    def set_output(self, session, params):
+        """set_output(state)
+
+        **Task** - Turn the channel connected to the coldload on or off.
+
+        Parameters:
+            state (bool): True for on, False for off.
+        """
+
+        params['channel'] = self.psu_channel
+        return super().set_output(session, params=params)
 
     @ocs_agent.param('volts', type=float, check=lambda x: 0 <= x <= 30)
     def set_voltage(self, session, params):

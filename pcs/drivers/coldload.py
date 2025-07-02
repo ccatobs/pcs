@@ -1,18 +1,20 @@
 from ocs.ocs_client import OCSClient
 import time
 import numpy as np
+import txaio 
+txaio.use_twisted()
 
 class Coldload:
 
-    def __init__(self, lakeshore, ls_channel, ext_log = None):
+    def __init__(self, lakeshore, ls_channel):
         self.ls_channel = ls_channel
-        self.ext_log = ext_log
+        self.log = txaio.make_logger()
         
         # Create Lakeshore client for grabbing coldload temperature data
         try:
             self.lakeshore = OCSClient(lakeshore, args=[]) 
         except Exception as e:
-            self.logger(f'Could not connect to Lakeshore agent \033[3m{lakeshore}\033[0m for temperature monitoring: {e}', 'error')
+            self.log.error(f'Could not connect to Lakeshore agent \033[3m{lakeshore}\033[0m for temperature monitoring: {e}')
 
     def get_temp(self):
         """
@@ -27,14 +29,14 @@ class Coldload:
             try:
                 temp = acq_status['data']['fields'][self.ls_channel]['T']
             except KeyError as e:
-                self.logger(f'Specified Lakeshore channel {self.ls_channel} is not valid: {e}', 'error')
+                self.log.error(f'Specified Lakeshore channel {self.ls_channel} is not valid: {e}')
                 temp = None
         else:
-            self.logger('Lakeshore data acquisition is not running.', 'error')
+            self.log.error('Lakeshore data acquisition is not running.')
             temp = None
         return temp
 
-    def set_temp(self, temp, get_current, set_current, *args, **kwargs):
+    def set_temp(self, temp: float, get_current, set_current, *args, **kwargs):
         """
         Set the temperature of the coldload using a proportional integral derivative (PID) controller.
         The PID controller uses the coldload temperature as the process variable and the current squared as the control variable. 
@@ -48,10 +50,12 @@ class Coldload:
             kwargs:
                 sample_int (float): Interval at which to sample coldload temperature
                 avg_int    (float): Interval over which to average coldload temperatures (averaged temperature used as PID process variable). Also sets timescale for PID control
+                thresholds  (List(float)): Error thresholds at which to modify avg_int. avg_int will be used for errors greater than the largest threshold and then multiplied by 2 for each threshold passed.
                 timeout (float): Time in minutes after which to exit PID loop (0 for indefinite)
                 yield_dict (bool): Whether to yield error values and coldload current after each PID control loop
                 max_current (float): Maximum current limit
                 pid (List[float]): Proportional, integral, and derivative control coefficients 
+                int_threshold (float): Error threshold hold after which the integral term will start contributing to the PID control.
         """
 
         sample_int = 0.5
@@ -59,9 +63,11 @@ class Coldload:
         timeout = 180
         yield_dict = False
 
+        reset_current = False
         max_current = 0.6
-        pid = [2.25e-3, 5.1e-7, 0.71]
-        thresholds = [0.01, 0.1, 1, 5]
+        pid = [5e-4, 1e-7, 9e-2]
+        int_threshold = 0.125
+        thresholds = [1.13e-3, 2.5e-7, 0.35]
 
         err_p = temp - self.get_temp()
         err_i = 0.0
@@ -73,6 +79,8 @@ class Coldload:
                 sample_int = v
             elif k == 'avg_int':
                 default_avg_int = v
+            elif k == 'thresholds':
+                thresholds = v
             elif k == 'timeout':
                 timeout = v
             elif k == 'yield_dict':
@@ -83,7 +91,10 @@ class Coldload:
                 pid = v
             elif k == 'err_i':
                 err_i = v
-        
+            elif k == 'int_threshold':
+                int_threshold = v
+            elif k == 'reset_current':
+                reset_current = v
         avg_int = default_avg_int
         timeout *= 60 # Convert timeout to seconds
 
@@ -108,11 +119,11 @@ class Coldload:
 
                     # Calculate the PID error values
                     err_d = (avg_err - err_p)/delta_t
-                    err_i += avg_err * delta_t
+                    if np.abs(avg_err) <= int_threshold: err_i += avg_err * delta_t
                     err_p = avg_err
 
                     # Vary avg_int depending on how small error is to reduce noise in derivative at small errors 
-                    avg_int = default_avg_int * (2 ** sum(err_p < threshold for threshold in thresholds)) 
+                    avg_int = default_avg_int * (2 ** sum(np.abs(err_p) < threshold for threshold in thresholds)) 
                     
                     # Set the integral error to zero if the current is already zero so that there is not a large accumulated error as the temperature decays slowly
                     if curr_sq == 0: err_i = 0.0
@@ -132,23 +143,4 @@ class Coldload:
                         yield pids
             time.sleep(0.1) # Wait to prevent wasting CPU resources
             if yield_dict: yield None # Yield None on non-PID loops to prevent the method from blocking for avg_int seconds 
-    
-    #=========#
-    # Logging #
-    #=========#
-    def logger(self, msg, level):
-        level = '_' + level
-        if not self.ext_log is None and hasattr(self, level): 
-            method = getattr(self, level)
-            method(msg)
-        else:
-            print(msg)
-
-    #==========================#
-    # Logging Internal Methods #
-    #==========================#
-    def _info(self, msg):
-        self.ext_log.info(msg)
-
-    def _error(self, msg):
-        self.ext_log.error(msg)
+        if reset_current: set_current(*args, curr=0.0)

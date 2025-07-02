@@ -23,9 +23,10 @@ class ColdloadAgent_ScpiPsu(ScpiPsuAgent):
         self.max_current = max_current
 
         # Create coldload object
-        self.cl = Coldload(lakeshore[0], lakeshore[1], ext_log=self.log)
+        self.cl = Coldload(lakeshore[0], lakeshore[1])
         self.err_i = 0.0 # Store integral error of set_temp PID in case control loop is interrupted 
 
+        self.log = agent.log
         # Register OCS feed to log PID temperature control parameters
         self.agent.register_feed('pid_output',
                                  record=True,
@@ -45,7 +46,7 @@ class ColdloadAgent_ScpiPsu(ScpiPsuAgent):
         with self.lock.acquire_timeout(timeout=5, job='get_temp') as acquired:
             if not acquired:
                 self.log.error(f'Lock could not be acquired because it is held by {self.lock.job}.')
-                return False, 'Could not acquire lock.'
+                return False, f"Lock could not be acquired because it is held by {self.lock.job}."
 
             temp = self.cl.get_temp()
             data = {'timestamp': time.time(),
@@ -58,10 +59,14 @@ class ColdloadAgent_ScpiPsu(ScpiPsuAgent):
     @ocs_agent.param('temp', type=float, check=lambda x: 60 <= x <= 120)
     @ocs_agent.param('sample_int', type=float, default = 0.5)
     @ocs_agent.param('avg_int', type=float, default = 7.5)
+    @ocs_agent.param('thresholds', type=list, default=[0.01, 0.1, 1, 5])
     @ocs_agent.param('lock_int', type=float, default=0.1)
     @ocs_agent.param('timeout', type=float, default=180)
     @ocs_agent.param('max_current', type=float, default=None)
-    @ocs_agent.param('pid', type=list, default=[2.25e-3, 5.1e-7, 0.71])
+    @ocs_agent.param('pid', type=list, default=[1e-3, 1.75e-7, 0.8])
+    @ocs_agent.param('int_threshold', type=float, default=0.1)
+    @ocs_agent.param('reset_int', type=bool, default=True)
+    @ocs_agent.param('reset_current', type=bool, default=False)
     def set_temp(self, session, params):
         """
         **Process** - Set the temperature of the coldload using a proportional integral derivative (PID) controller.
@@ -71,10 +76,12 @@ class ColdloadAgent_ScpiPsu(ScpiPsuAgent):
             temp (float): Temperature to set coldload to
             sample_int  (float): Interval at which to sample coldload temperature
             avg_int     (float): Interval over which to average coldload temperatures (averaged temperature used as PID process variable). Also sets timescale for PID control
+            thresholds  (List(float)): Error thresholds at which to modify avg_int. avg_int will be used for errors greater than the largest threshold and then multiplied by 2 for each threshold passed.
             lock_int    (float): Interval at which to release lock
             timeout     (float): Time in minutes after which to exit PID loop (0 for indefinite)
             max_current (float): Maximum current limit
             pid         (List[float]): Proportional, integral, and derivative control coefficients 
+            int_threshold (float): Error threshold hold after which the integral term will start contributing to the PID control.
         """
 
         temp = params.pop('temp')
@@ -85,13 +92,13 @@ class ColdloadAgent_ScpiPsu(ScpiPsuAgent):
         with self.lock.acquire_timeout(timeout=1, job='set_temp') as acquired:
             if not acquired:
                 self.log.error(f"Lock could not be acquired because it is held by {self.lock.job}.")
-                return False
+                return False, f"Lock could not be acquired because it is held by {self.lock.job}."
             
 
             last_release = time.time()
             curr_args = [self.psu_channel]
             params['yield_dict'] = True
-            params['err_i'] = self.err_i
+            params['err_i'] = 0.0 if params['reset_int'] else self.err_i
             pid_control = self.cl.set_temp(temp, self.psu.get_curr, self.psu.set_curr, *curr_args, **params)
             self.temp_control = True
             while self.temp_control:
@@ -116,6 +123,7 @@ class ColdloadAgent_ScpiPsu(ScpiPsuAgent):
                 # Catch exception raised if set_temp timeout is reached
                 except StopIteration:
                     self.temp_control = False  
+            if params['reset_current']: self.psu.set_curr(self.psu_channel, 0.0)
         return True, 'set_temp executed successfully.'
 
     def stop_set_temp(self, session, params):
@@ -216,7 +224,7 @@ class ColdloadAgent_ScpiPsu(ScpiPsuAgent):
         with self.lock.acquire_timeout(timeout=5, job='read') as acquired:
             if not acquired:
                 self.log.error(f'Lock could not be acquired because it is held by {self.lock.job}.')
-                return False, 'Could not acquire lock.'
+                return False, f"Lock could not be acquired because it is held by {self.lock.job}."
         
             resp = self.psu.read()
             data = {'timestamp': time.time(),
@@ -237,7 +245,7 @@ class ColdloadAgent_ScpiPsu(ScpiPsuAgent):
         with self.lock.acquire_timeout(timeout=5, job='write') as acquired:
             if not acquired:
                 self.log.error(f'Lock could not be acquired because it is held by {self.lock.job}.')
-                return False, 'Could not acquire lock.'
+                return False, f"Lock could not be acquired because it is held by {self.lock.job}."
             
             msg = params['msg']
             if not msg:

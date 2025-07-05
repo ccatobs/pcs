@@ -2,6 +2,7 @@
 
 import json
 import requests
+import time
 
 class BFCU:
     """
@@ -16,7 +17,7 @@ class BFCU:
 
     """
 
-    def __init__(self,ip,key,port='49098',timeout=10):
+    def __init__(self,ip,key, port='49098',timeout=10):
         self.ip = ip
         self.api_key = key
         self.timeout = timeout
@@ -37,7 +38,7 @@ class BFCU:
                              a dictionary with keys.
         """
         url = self.https_root + path + '/?key=' + str(self.api_key)
-        req = requests.get(url, timeout=self.timeout, verify='server-cert.pem')
+        req = requests.get(url, timeout=self.timeout, verify= 'server-cert.pem')
         resp = req.json()
         
         return resp
@@ -54,7 +55,7 @@ class BFCU:
         response = self.msg('/values/mapper/bf/pressures/p' + str(value))
         latest_value = response['data']['mapper.bf.pressures.p' + str(value)]['content']['latest_value']
         pressure = latest_value['value']
-        time = (latest_value['date']) / 1000
+        time = float(latest_value['date']) / 1000
         if pressure != '':
             pressure = float(pressure) * 1000
         else:
@@ -68,23 +69,39 @@ class BFCU:
         response = self.msg('/values/mapper/bf/flow')
         latest_value = response['data']['mapper.bf.flow']['content']['latest_value']
         flow = float(latest_value['value'])
-        time = (latest_value['date']) / 1000
+        time = float(latest_value['date']) / 1000
         
         return flow, time
         
     def get_still_heater_power(self):
-        """Returns the power of the still heater in watts"""
+        """Returns the power of the still heater in mW"""
         
         response = self.msg('/values/mapper/temperature_control/heaters/still/power')
         latest_value = response['data']['mapper.temperature_control.heaters.still.power']['content']['latest_value']
-        power = latest_value['value']
-        time = latest_value['date']
         
-        return power, time
+        if self.get_still_heater_state() == '0':
+            power = 0.00
+            timestamp = time.time()
+            return power, timestamp
+            
+        if self.get_still_heater_state() == '1':
+            power = float(latest_value['value']) * 10e3
+            timestamp = time.time()
+            return power, timestamp
         
     def get_sample_heater_power(self):
-        """Returns the power of the sample heater in watts"""
-        return self.msg('/values/mapper/temperature_control/heaters/sample/power')['data']['mapper.temperature_control.heaters.sample.power']['content']['latest_value']['value']
+        """Returns the power of the sample heater in micro Watts"""
+        response = self.msg('/values/mapper/temperature_control/heaters/sample/power')
+        latest_value = response['data']['mapper.temperature_control.heaters.sample.power']['content']['latest_value']['value']
+        if self.get_sample_heater_state() == '0':
+            power = 0.00
+            timestamp = time.time()
+            return power, timestamp
+            
+        if self.get_sample_heater_state() == '1':
+            power = float(latest_value['value']) * 10e6
+            timestamp = time.time()
+            return power, timestamp
         
     def get_sample_heater_state(self):
         """Returns boolean value of sample heater state

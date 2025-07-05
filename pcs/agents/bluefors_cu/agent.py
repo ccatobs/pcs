@@ -102,14 +102,10 @@ class Bluefors_CU_Agent:
         agg_params = {
             'frame_length': 10 * 60  # [sec]
         }
-        self.agent.register_feed('pressures',
+        self.agent.register_feed('bfcu',
                                  record=True,
                                  agg_params=agg_params,
                                  buffer_time=1)
-        self.agent.register_feed('flow',
-                                  record=True,
-                                  agg_params=agg_params,
-                                  buffer_time=1)
         
 
     @ocs_agent.param('auto_acquire', default=False, type=bool)
@@ -196,13 +192,13 @@ class Bluefors_CU_Agent:
                 pm.sleep()
 
                 # Relinquish sampling lock occasionally.
-                if time.time() - last_release > 1.:
+                if time.time() - last_release > 2.:
                     last_release = time.time()
                     if not self._lock.release_and_acquire(timeout=10):
                         self.log.warn(f"Failed to re-acquire sampling lock, "
                                       f"currently held by {self._lock.job}.")
                         continue
-                
+                        
                 for i in range(1,7):
                     pressure, timestamp = self.module.get_pressure(i)
                     channel_str = 'p' + str(i)
@@ -212,30 +208,54 @@ class Bluefors_CU_Agent:
                         'data': {}
                     }
                     data['data'][channel_str] = pressure
-                    session.app.publish_to_feed('pressures', data)
+                    session.app.publish_to_feed('bfcu', data)
                     self.log.debug("{data}", data=session.data)
                     field_dict = {channel_str: {"pressure": pressure,
                                                 "timestamp": timestamp}}
                     session.data['fields'].update(field_dict)
-                    time.sleep(2)
+                    time.sleep(1)
               
-                  
+                
                 flow, timestamp = self.module.get_flow()
                 channel_str = 'flow_rate'
                 data = {
                    'timestamp': timestamp,
-                    'block_name': channel_str,
-                    'data': {}
+                   'block_name': channel_str,
+                   'data': {}
                     }
                 data['data'][channel_str] = flow
-                session.app.publish_to_feed('flow', data)
+                session.app.publish_to_feed('bfcu', data)
                 self.log.debug("{data}", data=session.data)
                     
                 # For session.data
-                field_dict = {channel_str: {"value": flow,
+                field_dict = {channel_str: {"flow_rate": flow,
                                                 "timestamp": timestamp}}
                 session.data['fields'].update(field_dict)                
-         
+                
+                time.sleep(1)
+                
+                still_power, timestamp = self.module.get_still_heater_power()
+                timestamp = round(timestamp,3)
+		        # Sanity check the timestamp (valid UNIX time range)
+                if not isinstance(timestamp, (int, float)) or timestamp < 1e9 or timestamp > 2e10:
+                    self.log.debug(f"Invalid timestamp detected: {timestamp}")
+                else:
+                
+                    channel_str = 'still_power'
+                    data = {
+                    'timestamp': timestamp,
+                    'block_name': channel_str,
+                    'data': {}
+                    }
+                    data['data'][channel_str] = still_power
+                    session.app.publish_to_feed('bfcu', data)
+                    self.log.debug("{data}", data=session.data)
+                    
+                    # For session.data
+                    field_dict = {channel_str: {"power": still_power,
+				                        "timestamp": timestamp}}
+                    session.data['fields'].update(field_dict)  
+               
         return True, 'Acquisition exited cleanly.'                            
        
     def _stop_acq(self, session, params=None):
@@ -291,7 +311,7 @@ def main(args=None):
     agent, runner = ocs_agent.init_site_agent(args)
 
     bfcu_agent = Bluefors_CU_Agent(agent, args.ip_address, args.key)
-
+    
     agent.register_task('init_bfcu', bfcu_agent.init_bfcu,
                         startup=init_params)
                         

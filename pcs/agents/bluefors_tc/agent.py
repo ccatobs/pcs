@@ -109,11 +109,7 @@ class Bluefors_TC_Agent:
                                  record=True,
                                  agg_params=agg_params,
                                  buffer_time=1)
-        self.agent.register_feed('heaters',
-                                 record=True,
-                                 agg_params=agg_params,
-                                 buffer_time=1)
-
+                                 
     @ocs_agent.param('auto_acquire',type=bool, default=False)
     @ocs_agent.param('acq_params', type=dict, default=None)
     def init_bftc(self, session, params=None):
@@ -347,12 +343,6 @@ class Bluefors_TC_Agent:
                 if state == 'off':
                     self.module.sample_heater.disable_heater()
             
-            data = {'timestamp': time.time(),
-                    'block_name': heater,
-                    'data': {'{}_heater_state'.format(heater): state}
-                    }
-            session.app.publish_to_feed('heaters', data)
-            
             
         return True, "{} heater is {}".format(heater, state)
     
@@ -375,12 +365,6 @@ class Bluefors_TC_Agent:
             if heater == 'sample':
                 print(self.module.sample_heater.set_setpoint(temp))
                 
-            data = {'timestamp': time.time(),
-                    'block_name': heater,
-                    'data': {'{}_heater_setpoint'.format(heater): temp}
-                    }
-            session.app.publish_to_feed('heaters', data)
-            
         return True, "{} setpoint to {}".format(heater, temp)
         
         

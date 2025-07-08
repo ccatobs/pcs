@@ -10,6 +10,4 @@ RUN python -m pip install -e ./ccatkidlib && \
 
 WORKDIR /
 
-ENV OCS_CONFIG_DIR='/config'
-
 ENTRYPOINT ["dumb-init", "ocs-agent-cli"]

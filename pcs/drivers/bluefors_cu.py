@@ -38,7 +38,7 @@ class BFCU:
                              a dictionary with keys.
         """
         url = self.https_root + path + '/?key=' + str(self.api_key)
-        req = requests.get(url, timeout=self.timeout, verify= '/home/choicosmolab/pcs/pcs/agents/bluefors_cu/server-cert.pem')
+        req = requests.get(url, timeout=self.timeout, verify= 'server-cert.pem')
         resp = req.json()
         
         return resp

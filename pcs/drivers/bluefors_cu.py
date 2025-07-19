@@ -38,7 +38,7 @@ class BFCU:
                              a dictionary with keys.
         """
         url = self.https_root + path + '/?key=' + str(self.api_key)
-        req = requests.get(url, timeout=self.timeout, verify= 'server-cert.pem')
+        req = requests.get(url, timeout=self.timeout, verify= '/home/choicosmolab/pcs/pcs/agents/bluefors_cu/server-cert.pem')
         resp = req.json()
         
         return resp
@@ -56,7 +56,7 @@ class BFCU:
         latest_value = response['data']['mapper.bf.pressures.p' + str(value)]['content']['latest_value']
         pressure = latest_value['value']
         time = float(latest_value['date']) / 1000
-        if pressure != ' ':
+        if pressure != '':
             pressure = float(pressure) * 1000
         else:
             pressure = 0.0
@@ -70,7 +70,7 @@ class BFCU:
         latest_value = response['data']['mapper.bf.flow']['content']['latest_value']
         flow = float(latest_value['value'])
         time = float(latest_value['date']) / 1000
-        if flow != ' ':
+        if flow != '':
             flow = float(flow) * 1000
         else:
             flow = 0.0

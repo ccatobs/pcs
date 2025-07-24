@@ -11,6 +11,10 @@ from ocs.ocs_client import OCSClient
 import time
 
 client = OCSClient('acu1')
+
+print (client.tcs_broadcast(udp_host='172.17.0.1', udp_port=5601))
+time.sleep(5)
+
 print (client.broadcast.start())
 
 print('\nMonitoring (ctrl-c to stop and exit)...\n')

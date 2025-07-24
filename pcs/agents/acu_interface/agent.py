@@ -20,7 +20,7 @@ import argparse
 import txaio
 import random
 from os import environ
-import socket, struct, requests
+import socket, struct
 from autobahn.twisted.util import sleep as dsleep
 
 from ocs import ocs_agent, site_config
@@ -37,12 +37,8 @@ import numpy as np
 from threading import Thread
 
 #import acu modules
-import aculib
-import drivers as drv
-
-# For logging
-txaio.use_twisted()
-LOG = txaio.make_logger()
+from pcs.agents.acu_interface import aculib
+from pcs.agents.acu_interface import drivers as drv
 
 
 class ACUAgent:

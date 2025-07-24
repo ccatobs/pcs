@@ -1,6 +1,6 @@
 #!/bin/python
 
-import os, socket, yaml
+import os, yaml
 import time
 import socket, struct, requests
 

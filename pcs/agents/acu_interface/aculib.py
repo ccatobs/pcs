@@ -1,7 +1,7 @@
 #!/bin/python
 
-import os, yaml
-import time
+import os, yaml, json, sys
+import time, datetime
 import socket, struct, requests
 
 #: Global variable to hold the most-recent config block from calling
@@ -129,16 +129,21 @@ class observatory_control_system:
 
     def get_status(self):
         cmd = f"{self.url_prefix}/acu/status"
-        self.log.info(f"getting status from {self.url}{cmd}")
+        #cmd = "/Values?identifier=DataSets.StatusGeneral8100&format=JSON"
+        # cmd = "http://127.0.0.1:8100/Values?identifier=DataSets.StatusGeneral8100&format=JSON"
+        #self.log.info(f"getting status from {self.url}{cmd}")
         try:
             self.status = self.session.get(self.url + cmd, verify=self.verify_cert).json()
+            #self.status = self.session.get(cmd, verify=self.verify_cert).json()
         except requests.exceptions.ConnectionError as e:
             self.log.error(
                     f"failed to connect on {self.url} check is server up, exiting"
+                    #f"failed to connect on {cmd} check is server up, exiting"
                     )
             sys.exit(-1)
         return self.status
 
+    
     def abort(self):
         cmd = f"{self.url_prefix}/abort"
         r = self.post(cmd, "")

@@ -56,15 +56,16 @@ class ColdloadAgent_ScpiPsu(ScpiPsuAgent):
             
         return temp is not None, temp
 
-    @ocs_agent.param('temp', type=float, check=lambda x: 60 <= x <= 120)
+    @ocs_agent.param('temp', type=float, check=lambda x: 60 <= x <= 200)
     @ocs_agent.param('sample_int', type=float, default = 0.5)
     @ocs_agent.param('avg_int', type=float, default = 7.5)
     @ocs_agent.param('thresholds', type=list, default=[0.01, 0.1, 1, 5])
     @ocs_agent.param('lock_int', type=float, default=0.1)
     @ocs_agent.param('timeout', type=float, default=180)
     @ocs_agent.param('max_current', type=float, default=None)
-    @ocs_agent.param('pid', type=list, default=[1e-3, 1.75e-7, 0.8])
-    @ocs_agent.param('int_threshold', type=float, default=0.1)
+    @ocs_agent.param('init_pid', type=list, default=[1e-3, 1.75e-7, 0.8])
+    @ocs_agent.param('stable_pid', type=list, default=[1e-3, 1.75e-7, 0.8])
+    @ocs_agent.param('ID_threshold', type=float, default=0.1)
     @ocs_agent.param('reset_int', type=bool, default=True)
     @ocs_agent.param('reset_current', type=bool, default=False)
     def set_temp(self, session, params):

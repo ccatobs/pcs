@@ -65,8 +65,9 @@ class Coldload:
 
         reset_current = False
         max_current = 0.6
-        pid = [5e-4, 1e-7, 9e-2]
-        int_threshold = 0.125
+        init_pid = [5e-4, 1e-7, 9e-2]
+        stable_pid = [5e-4, 1e-7, 9e-2]
+        ID_threshold = 0.125
         thresholds = [1.13e-3, 2.5e-7, 0.35]
 
         err_p = temp - self.get_temp()
@@ -87,12 +88,14 @@ class Coldload:
                 yield_dict = v
             elif k == 'max_current':
                 max_current = v
-            elif k == 'pid': 
-                pid = v
+            elif k == 'init_pid': 
+                init_pid = v
+            elif k == 'stable_pid':
+                stable_pid = v
             elif k == 'err_i':
                 err_i = v
-            elif k == 'int_threshold':
-                int_threshold = v
+            elif k == 'ID_threshold':
+                ID_threshold = v
             elif k == 'reset_current':
                 reset_current = v
         avg_int = default_avg_int
@@ -100,6 +103,7 @@ class Coldload:
 
         # Get the current coldload current and use current squared as the control variable so that it is proportional to power (which is roughly linear with temperature)
         curr_sq = get_current(*args)**2
+        pid = init_pid
 
         start_time  = time.time()
         last_sample = start_time
@@ -118,15 +122,17 @@ class Coldload:
                     errs = [] # Reset list of errors
 
                     # Calculate the PID error values
-                    err_d = (avg_err - err_p)/delta_t
-                    if np.abs(avg_err) <= int_threshold: err_i += avg_err * delta_t
+                    if np.abs(avg_err) <= ID_threshold: 
+                        if curr_sq == 0: 
+                            pid = stable_pid
+                            ID_threshold *= 10
+                        err_i += avg_err * delta_t
+                        err_d = (avg_err - err_p)/delta_t
                     err_p = avg_err
 
                     # Vary avg_int depending on how small error is to reduce noise in derivative at small errors 
-                    avg_int = default_avg_int * (2 ** sum(np.abs(err_p) < threshold for threshold in thresholds)) 
+                    avg_int = default_avg_int * (2 ** sum(np.abs(err_p) < threshold for threshold in thresholds))
                     
-                    # Set the integral error to zero if the current is already zero so that there is not a large accumulated error as the temperature decays slowly
-                    if curr_sq == 0: err_i = 0.0
 
                     # Vary the current squared as specified by the PID controller
                     curr_sq += pid[0]*err_p + pid[1] * err_i + pid[2]*err_d

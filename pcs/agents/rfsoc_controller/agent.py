@@ -127,9 +127,8 @@ class RFSoController:
         '''
         @wraps(func)
         def _wrapper(self, session, params):
-            RC = R(cfg_path = self.sys_cfg_path, initialize_boards = False, initialize_drones = False,
-                sess_id = self.session, measurement_name = self.measurement_name, measurement_desc = self.measurement_desc, curr_date = self.curr_date)
-            
+            RC = R(cfg_path = self.sys_cfg_path, init_boards = False, init_drones = False,
+                   sess_id = self.session, measurement_name = self.measurement_name, measurement_desc = self.measurement_desc, curr_date = self.curr_date)
             RC.NCLOs = self.NCLOs
             RC.drive_attens = self.drive_attens
             RC.sense_attens = self.sense_attens
@@ -138,7 +137,6 @@ class RFSoController:
             RC.set_atten(setup=False)
 
             params['R'] = RC
-
             rtn = func(self, session, params)
 
             self._update_control(RC)
@@ -226,7 +224,10 @@ class RFSoController:
                 self.ocs_session = None
 
     @inlineCallbacks
-    def run(self, session, params=None):
+    @ocs_agent.param('script', type=str)
+    @ocs_agent.param('args', type=list, default=[])
+    @ocs_agent.param('new_session', type=bool, default=True)
+    def run(self, session, params):
         '''run(script, args=None)
         
         **Task** - Run a ccatkidlib RFSoC control script
@@ -245,13 +246,13 @@ class RFSoController:
 
         '''
         status, msg = yield self._run_script(session, params['script'], params.get('args', []))
-
         # Set stored NCLO and attenuations to None since their state may have changed during script execution
         self.NCLOs = None
         self.drive_attens = None
         self.sense_attens = None
 
-        self._new_session(init_boards=False)
+        if params['new_session']:
+            self._new_session(init_boards=False)
 
         return status, msg
 
@@ -272,20 +273,35 @@ class RFSoController:
         return
 
     @_get_control
-    @ocs_agent.param('com_to', type=list, default=None)
-    @ocs_agent.param('time', type=float)
+    @ocs_agent.param('com_to',          type=list, default=None)
+    @ocs_agent.param('time',            type=float, check=lambda x: x > 0)
+    @ocs_agent.param('parallel_boards', type=int,  default=None)
+    @ocs_agent.param('parallel_drones', type=int,  default=None, check=lambda x: 4 >= x >= 1)
+    @ocs_agent.param('write_comb',      type=bool, default=None)
+    @ocs_agent.param('tone_freqs',      type=list, default=None)
+    @ocs_agent.param('tone_powers',     type=list, default=None)
+    @ocs_agent.param('tone_phis',       type=list, default=None)
     def take_timestream(self, session, params):
-        return
+        with self.lock.acquire_timeout(5, job='timestream') as acquired:
+            if not acquired:
+                self.log.error(f"Could not acquire lock because it is held by {self.lock.job}.")
+                return False, f"Could not acquire lock because it is held by {self.lock.job}."
+            params = self._filter_params(params)
+            RC = params.pop('R')
+            t_sec = params.pop('time')
+            stream_files = RC.take_timestream(t_sec, **params)
+            data = {'data_files': list(map(str, stream_files))}
+            self._publish_data(data, RC, params, session)
+        return True, 'Successfully finished taking timestream.'
     
     #===============#
     # Sweep Methods #
     #===============#
     
     @_get_control
-    @ocs_agent.param('R',               type=R)
     @ocs_agent.param('com_to',          type=list, default=None)
     @ocs_agent.param('write_comb',      type=bool, default=True)
-    @ocs_agent.param('sweep_steps',     type=int,  default=None, check=lambda x: x > 0)
+    @ocs_agent.param('sweep_steps',     type=list, default=None, check=lambda x: all(xx > 0 for xx in x))
     @ocs_agent.param('parallel_boards', type=int,  default=None)
     @ocs_agent.param('parallel_drones', type=int,  default=None, check=lambda x: 4 >= x >= 1)
     def take_vna_sweep(self, session, params):
@@ -296,7 +312,7 @@ class RFSoController:
         Parameters:
             com_to (list[str], optional): List of drones to take VNA sweep
             write_comb (bool, optional): Whether to write a new VNA comb (default: True)
-            sweep_steps (int, optional): Number of points each tone should sweep (default: sweep_steps in drone_config)
+            sweep_steps (int | list[int], optional): Number of points each tone should sweep (default: sweep_steps in drone_config)
             parallel_boards (int, optional): Number of boards to run in parallel (default: parallel_boards in system_config)
             parallel_drones (int, optional): Number of drones to run in parallel (default: parallel_drones in system_config)
         
@@ -315,25 +331,98 @@ class RFSoController:
                 return False, f"Could not acquire lock because it is held by {self.lock.job}."
             params = self._filter_params(params)
             RC = params.pop('R')
-            data = RC.take_vna_sweep(**params)
-            data = list(map(str, data))
+            vna_files = RC.take_vna_sweep(**params)
+            data = {'data_files': list(map(str, vna_files))}
             self._publish_data(data, RC, params, session)
         return True, 'Successfully finished taking VNA sweep.'
 
     @_get_control
-    @ocs_agent.param('com_to', type=list, default=[])
+    @ocs_agent.param('com_to',          type=list, default=None)
+    @ocs_agent.param('chan_bw',         type=list, default=None, check=lambda x: all(xx > 0 for xx in x))
+    @ocs_agent.param('sweep_steps',     type=list, default=None, check=lambda x: all(xx > 0 for xx in x))
+    @ocs_agent.param('parallel_boards', type=int,  default=None)
+    @ocs_agent.param('parallel_drones', type=int,  default=None, check=lambda x: 4 >= x >= 1)
+    @ocs_agent.param('write_comb',      type=bool, default=None)
+    @ocs_agent.param('tone_freqs',      type=list, default=None)
+    @ocs_agent.param('tone_powers',     type=list, default=None)
+    @ocs_agent.param('tone_phis',       type=list, default=None)
     def take_target_sweep(self, session, params):
-        return 
+        '''take_target_sweep(com_to=None, write_comb=True, sweep_steps=None, parallel_boards=None, parallel_drones=None)
+        
+        **Task** - Take a target sweep
+        
+        Parameters:
+            com_to (list[str], optional): List of drones to take VNA sweep
+            write_comb (bool, optional): Whether to write a new VNA comb (default: True)
+            sweep_steps (int | list[int], optional): Number of points each tone should sweep (default: sweep_steps in drone_config)
+            parallel_boards (int, optional): Number of boards to run in parallel (default: parallel_boards in system_config)
+            parallel_drones (int, optional): Number of drones to run in parallel (default: parallel_drones in system_config)
+        
+        Examples:
+            Take target sweep with all drones of board 1 and drone 1 of board 2 in parallel::
+                client.take_target_sweep(com_to=['1', '2.1'], sweep_steps=500, parallel_boards=2, parallel_drones=4)
+        
+        Notes:
+            Example session data:
+                >>> response.session['data']
+                PUT EXAMPLE HERE  
+        '''
+        with self.lock.acquire_timeout(5, job='target_sweep') as acquired:
+            if not acquired:
+                self.log.error(f"Could not acquire lock because it is held by {self.lock.job}.")
+                return False, f"Could not acquire lock because it is held by {self.lock.job}."
+            params = self._filter_params(params)
+            RC = params.pop('R')
+            targ_files = RC.take_target_sweep(**params)
+            data = {'data_files': list(map(str, targ_files))}
+            self._publish_data(data, RC, params, session)
+        return True, 'Successfully finished taking target sweep.' 
 
     @_get_control
-    @ocs_agent.param('com_to', type=list, default=[])
+    @ocs_agent.param('com_to',          type=list, default=None)
+    @ocs_agent.param('new_sweep',       type=bool, default=True)
+    @ocs_agent.param('write_comb',      type=bool, default=True)
+    @ocs_agent.param('write_targ_comb', type=bool, default=True)
+    @ocs_agent.param('sweep_steps',     type=list, default=None, check=lambda x: all(xx > 0 for xx in x))
+    @ocs_agent.param('parallel_boards', type=int,  default=None)
+    @ocs_agent.param('parallel_drones', type=int,  default=None, check=lambda x: 4 >= x >= 1)
     def find_detectors(self, session, params):
-        return
+        with self.lock.acquire_timeout(5, job='find_detectors') as acquired:
+            if not acquired:
+                self.log.error(f"Could not acquire lock because it is held by {self.lock.job}.")
+                return False, f"Could not acquire lock because it is held by {self.lock.job}."
+            params = self._filter_params(params)
+            RC = params.pop('R')
+            found_nums, vna_files = RC.find_detectors(**params)
+            vna_files = list(map(str, vna_files))
+            data = {'found_nums': found_nums, 'data_files': vna_files}
+            self._publish_data(data, RC, params, session)
+        return True, 'Successfully finished finding detectors from VNA sweep.'
 
     @_get_control
-    @ocs_agent.param('com_to', type=list, default=[])
-    def find_detectors_fine(self, session, params):
-        return
+    @ocs_agent.param('com_to',          type=list, default=None)
+    @ocs_agent.param('method',          type=str, default='grad')
+    @ocs_agent.param('new_sweep',       type=bool, default=True)
+    @ocs_agent.param('write_targ_comb', type=bool, default=True)
+    @ocs_agent.param('chan_bw',         type=list, default=None, check=lambda x: all(xx > 0 for xx in x))
+    @ocs_agent.param('sweep_steps',     type=list, default=None, check=lambda x: all(xx > 0 for xx in x))
+    @ocs_agent.param('parallel_boards', type=int,  default=None)
+    @ocs_agent.param('parallel_drones', type=int,  default=None, check=lambda x: 4 >= x >= 1)
+    @ocs_agent.param('write_comb',      type=bool, default=None)
+    @ocs_agent.param('tone_freqs',      type=list, default=None)
+    @ocs_agent.param('tone_powers',     type=list, default=None)
+    @ocs_agent.param('tone_phis',       type=list, default=None)
+    def tune_tone_placement(self, session, params):
+        with self.lock.acquire_timeout(5, job='tune_tone_placement') as acquired:
+            if not acquired:
+                self.log.error(f"Could not acquire lock because it is held by {self.lock.job}.")
+                return False, f"Could not acquire lock because it is held by {self.lock.job}."
+            params = self._filter_params(params)
+            RC = params.pop('R')
+            targ_files = RC.tune_tone_placement(**params)
+            data = {'data_files': list(map(str, targ_files))}
+            self._publish_data(data, RC, params, session)
+        return True, 'Successfully finished finding detectors from VNA sweep.'
 
     #=======#
     # Other #
@@ -421,6 +510,10 @@ def main(args = None):
     agent.register_task('run', rfsoc_controller.run, blocking=False)
     agent.register_task('abort', rfsoc_controller.abort, blocking=False)
     agent.register_task('take_vna_sweep', rfsoc_controller.take_vna_sweep)
+    agent.register_task('take_target_sweep', rfsoc_controller.take_target_sweep)
+    agent.register_task('take_timestream', rfsoc_controller.take_timestream)
+    agent.register_task('find_detectors', rfsoc_controller.find_detectors)
+    agent.register_task('tune_tone_placement', rfsoc_controller.tune_tone_placement)
 
     # Run agent
     # ---------

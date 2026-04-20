@@ -18,6 +18,7 @@ numpy
 # For ACU interface agent
 astropy
 pyyaml
+soaculib @ git+https://github.com/simonsobs/soaculib.git@master
 
 # For Dymo scale agent
 pyusb

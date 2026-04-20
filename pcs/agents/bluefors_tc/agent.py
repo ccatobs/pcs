@@ -1,5 +1,6 @@
 # Bluefors TC agent
 
+import os, time
 import argparse
 import threading
 from contextlib import contextmanager
@@ -7,6 +8,7 @@ from contextlib import contextmanager
 from ocs import ocs_agent, site_config
 from ocs.ocs_twisted import Pacemaker, TimeoutLock
 from twisted.internet import reactor
+import txaio
 
 from pcs.drivers.bluefors_tc import BFTC
 
@@ -155,8 +157,8 @@ class Bluefors_TC_Agent:
             print("Initialized BF TC module: {!s}".format(self.module))
             session.add_message("BF TC initilized with ID: %s" % self.module.id)
 
-            self.thermometers = [channel.name for channel in self.module.channels]
-            
+            #self.thermometers = [channel.name for channel in self.module.channels]
+            self.thermometers = [channel.channel_num for channel in self.module.channels]
             self.initialized = True
 
         # Start data acquisition if requested
@@ -322,7 +324,7 @@ def main(args=None):
 
     bftc_agent = Bluefors_TC_Agent(agent, args.serial_number, args.ip_address)
 
-    agent.register_task('init_bftc', bftc_agent.bftc,
+    agent.register_task('init_bftc', bftc_agent.init_bftc,
                         startup=init_params)
     agent.register_process('acq', bftc_agent.acq, bftc_agent._stop_acq)
     # And many more to come...

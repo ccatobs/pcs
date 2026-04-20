@@ -20,6 +20,10 @@ astropy
 pyyaml
 soaculib @ git+https://github.com/simonsobs/soaculib.git@master
 
+# For Dymo scale agent
+pyusb
+libusb
+
 # Docs
 # see docs/requirements.txt
 

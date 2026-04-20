@@ -19,6 +19,10 @@ numpy
 astropy
 pyyaml
 
+# For Dymo scale agent
+pyusb
+libusb
+
 # Docs
 # see docs/requirements.txt
 

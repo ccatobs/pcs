@@ -65,7 +65,8 @@ class Adam_Agent:
 
             #self.dev = usb.core.find(idVendor = self.vid, idProduct = self.pid)
             self.module = Module(port = self.port)
-            print(self.module)
+            #print(self.module)
+            self.module.connect()
             if self.module is None:
                 raise ValueError('Device not found')
             #self.log.info(self.dev.get_id())
@@ -113,7 +114,7 @@ class Adam_Agent:
                 }
 
                 weight = self.module.read_weight()
-                #print(weight)
+                print(weight)
 
                 #weight = weight_line['weight']
 
@@ -126,7 +127,7 @@ class Adam_Agent:
 
                 session.data['fields'].update({'timestamp': current_time})
 
-                time.sleep(sleep_time)
+                #time.sleep(sleep_time)
                 #print(data['data']['weight'])
 
             self.agent.feeds['weight'].flush_buffer()

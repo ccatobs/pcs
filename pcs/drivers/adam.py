@@ -4,54 +4,7 @@ import time
 import math
 import usb.core
 import usb.util
-
-STATE_STABLE_ZERO = 2
-STATE_UNSTABLE_POSITIVE = 3
-STATE_STABLE_POSITIVE = 4
-STATE_NEGATIVE = 5  # returned both for stable and unstable values
-
-UNITS_KG = 3
-UNITS_LB = 12
-
-SCALE_TENTHS = 255
-SCALE_HUNDREDTHS = 256
-
-SLEEP_NO_DEVICE = 1
-SLEEP_STABLE = 1
-SLEEP_UNSTABLE = 0.1
-
-def parse_reading(data):
-
-    state_flag = data[1]
-    stable_states = [STATE_STABLE_ZERO, STATE_STABLE_POSITIVE]
-    is_stable = state_flag in stable_states
-    is_negative = state_flag == STATE_NEGATIVE
-
-    scale_flag = data[3]
-    if scale_flag == SCALE_TENTHS:
-        scale_factor = 0.1
-    elif scale_flag == SCALE_HUNDREDTHS:
-        scale_factor = 0.01
-    else:
-        scale_factor = 100  # want an obviously wrong value
-
-    weight = scale_factor * (data[4] + (256 * data[5]))
-    if is_negative:
-        weight = weight * -1
-
-    unit_flag = data[2]
-    if unit_flag == UNITS_KG:
-        unit = 'kg'
-    elif unit_flag == UNITS_LB:
-        unit = 'lbs'
-    else:
-        unit = unit_flag
-
-    return {
-        'is_stable': is_stable,
-        'weight': math.trunc(weight*10)/10,
-        'unit': unit
-    }
+from twisted.internet import threads, reactor
 
 class Module:
     """
@@ -59,16 +12,39 @@ class Module:
         Contains list of inputs which can be read from.
     """
     def __init__(self, port="/dev/ADAM"):
+        self.port = port
+        self.device = None
+
+    def connect(self):
+        """Call this via deferToThread, not in __init__."""
+        self.device = Serial(self.port)
+
+    def read_weight(self):
+        """Returns a Deferred — safe to call from the reactor thread."""
+        return threads.deferToThread(self._blocking_read)
+
+    def _blocking_read(self):
+        self.device.write(b'P\r\n')
+        # time.sleep() is OK here because we're in a thread, not the reactor
+        #import time; time.sleep(0.1)
+        read = self.device.readline().decode().strip()
+        parts = read.split()
+        try:
+            return float(parts[1])
+        except (ValueError, IndexError):
+            return -99
+
+    #def __init__(self, port="/dev/ADAM"):
         """
             Establish Serial communication.
         """
-        self.port = port
-        self.device = Serial(self.port)
+     #   self.port = port
+      #  self.device = Serial(self.port)
         #print(self.device)
 
         # was it found?
-        if self.device is None:
-            return None
+       # if self.device is None:
+        #    return None
 
         # use the first/default configuration
         #try:
@@ -84,7 +60,7 @@ class Module:
             Sends command to read weight from scale interface.
         """
         self.device.write(b'P\r\n')
-        time.sleep(0.1)
+        #time.sleep(0.1)
         read = self.device.readline().decode().strip()
         value = float(read.split()[1])
         unit = read.split()[2]

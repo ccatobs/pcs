@@ -109,12 +109,20 @@ class Adam_Agent:
                 current_time = time.time()
                 data = {
                     'timestamp': current_time,
-                    'block_time': 'weight',
+                    'block_name': 'weight',
                     'data': {}
                 }
 
                 weight = self.module.read_weight()
-                print(weight)
+                #print(weight)
+
+                try:
+                    weight = self.module.read_weight()
+                except Exception as e:
+                    print(f"EXCEPTION in read_weight: {type(e).__name__}: {e}")
+                    import traceback; traceback.print_exc()
+                    time.sleep(1)
+                    continue
 
                 #weight = weight_line['weight']
 

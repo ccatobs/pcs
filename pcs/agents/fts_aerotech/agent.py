@@ -10,6 +10,8 @@ from ocs import ocs_agent, site_config
 from ocs.ocs_twisted import Pacemaker, TimeoutLock
 from twisted.internet import reactor
 
+# Modified version of the SOCS FTS Aerotech agent
+# Updated to log current position of central mirror instead of the target position
 
 class FTSAerotechStage:
     """

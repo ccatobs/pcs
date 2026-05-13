@@ -1,13 +1,11 @@
 import os
 import sys
-import time
 
 import argparse
 from pathlib import Path
 from functools import wraps
 from ocs import ocs_agent, site_config
 from ocs.ocs_twisted import TimeoutLock
-import txaio
 
 # Import Twisted Modules for ccatkidlib python scripts
 from autobahn.twisted.util import sleep as dsleep

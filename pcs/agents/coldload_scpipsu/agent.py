@@ -1,12 +1,9 @@
 import argparse
 import time
-import numpy as np
 import os
-from collections import deque
 
 import txaio
 from ocs import ocs_agent, site_config
-from ocs.ocs_twisted import TimeoutLock
 from socs.agents.scpi_psu.agent import ScpiPsuAgent
 
 from pcs.drivers.coldload import Coldload
@@ -253,7 +250,7 @@ class ColdloadAgent_ScpiPsu(ScpiPsuAgent):
                 return False, f"Invalid message: {msg}"
             else:
                 self.psu.write(msg)
-            return True, f"Wrote message to power supply."
+            return True, "Wrote message to power supply."
 
 #===========#
 # Functions #

@@ -67,15 +67,10 @@ MONITOR_STRUCTURE = [
     ('ACU_general_errors', 'ACU_failures_errors', None, None),
     ('ACU_platform_status', 'platform_status', None, None),
     ('ACU_emergency', 'ACU_emergency', None, None),
-    # ('ACU_corotator', 'corotator', None, None),
-    # ('ACU_shutter', 'shutter', None, None),
     ('ACU_tilt', 'tilt_slow', 'changed', 0.5),
     (None, 'tilt_fast', None, None),
     ('ACU_sun_avoidance', 'sun_avoidance', None, 1.),
     ('ACU_corrections', 'corrections', None, 10.),
-    # ('ACU_hvac_data', 'hvac_data', None, 10.),
-    # ('ACU_hvac_ctrl', 'hvac_ctrl', None, None),
-    # ('ACU_hvac_faults', 'hvac_faults', None, None),
 ]
 
 #: Maximum update time (in s) for "monitor" process data, even with no changes
@@ -271,7 +266,7 @@ class ACUAgent:
     def monitor(self, session, params):
         """monitor()
 
-        **Process** - Refresh the cache of SATP ACU status information and
+        **Process** - Refresh the cache of CCAT FYST ACU status information and
         report it on the 'acu_status' and 'acu_status_influx' HK feeds.
 
         Summary parameters are ACU-provided time code, Azimuth mode,
@@ -958,6 +953,412 @@ class ACUAgent:
         #should be self-contained operation with both telescope movement commands
         #as well as DAQ controls
         pass
+
+    @ocs_agent.param('az_endpoint1', type=float)
+    @ocs_agent.param('az_endpoint2', type=float)
+    @ocs_agent.param('az_speed', type=float, default=None)
+    @ocs_agent.param('az_accel', type=float, default=None)
+    @ocs_agent.param('el_endpoint1', type=float, default=None)
+    @ocs_agent.param('el_endpoint2', type=float, default=None)
+    @ocs_agent.param('el_speed', type=float, default=0.)
+    @ocs_agent.param('el_freq', type=float, default=None)
+    @ocs_agent.param('el_mode', choices=['stop', 'preset', 'programtrack'],
+                     default=None)
+    @ocs_agent.param('num_scans', type=float, default=None)
+    @ocs_agent.param('start_time', type=float, default=None)
+    @ocs_agent.param('wait_to_start', type=float, default=None)
+    @ocs_agent.param('step_time', type=float, default=None)
+    @ocs_agent.param('az_start', default='end',
+                     choices=['end', 'mid', 'az_endpoint1', 'az_endpoint2',
+                              'mid_inc', 'mid_dec'])
+    @ocs_agent.param('az_drift', type=float, default=None)
+    @ocs_agent.param('scan_type', default=1, choices=[1, 2, 3])
+    @ocs_agent.param('az_vel_ref', type=float, default=None)
+    @ocs_agent.param('turnaround_method', default=None,
+                     choices=[None, 'standard', 'standard_gen',
+                              'three_leg', 'two_leg'])
+    @ocs_agent.param('scan_upload_length', type=float, default=None)
+    @ocs_agent.param('type', default=None, choices=[1, 2, 3])
+    @inlineCallbacks
+    def generate_scan(self, session, params):
+        """generate_scan(az_endpoint1, az_endpoint2, \
+                         az_speed=None, az_accel=None, \
+                         el_endpoint1=None, el_endpoint2=None, \
+                         el_speed=None, el_freq=None, \
+                         el_mode=None, \
+                         num_scans=None, start_time=None, \
+                         wait_to_start=None, step_time=None, \
+                         az_start='end', az_drift=None, \
+                         scan_type=1, az_vel_ref=None, \
+                         turnaround_method=None, \
+                         scan_upload_length=None)
+
+        **Process** - Scan generator, currently only works for
+        constant-velocity az scans with fixed elevation.
+
+        Parameters:
+            az_endpoint1 (float): first endpoint of a linear azimuth scan
+            az_endpoint2 (float): second endpoint of a linear azimuth scan
+            az_speed (float): azimuth speed for constant-velocity scan
+            az_accel (float): turnaround acceleration for a constant-velocity scan
+            el_endpoint1 (float): first endpoint of elevation motion.
+                In the present implementation, this will be the
+                constant elevation declared at every point in the
+                track.
+            el_endpoint2 (float): this is ignored.
+            el_speed (float): this is ignored.
+            el_freq (float): frequency of the elevation nods for
+                scan_type=3.
+            el_mode (str): By default, the elevation axis mode for
+                type 1 and 2 scans will be left in Preset after the
+                initial move.  To force it instead into Stop mode,
+                pass "stop" (case-sensitive) here.  ("preset" and
+                "programtrack" are also accepted, and will result in
+                that mode being set prior to launching the track.)
+            num_scans (int or None): if not None, limits the scan to
+                the specified number of constant velocity legs. The
+                process will exit without error once that has
+                completed.
+            start_time (float or None): a unix timestamp giving the
+                time at which the scan should begin.  The default is
+                None, which means the scan will start immediately (but
+                taking into account the value of wait_to_start).
+            wait_to_start (float): number of seconds to wait before
+                starting a scan, in the case that start_time is None.
+                The default is to compute a minimum time based on the
+                scan parameters and the ACU ramp-up algorithm; this is
+                typically 5-10 seconds.
+            step_time (float): time, in seconds, between points on the
+                constant-velocity parts of the motion.  The default is
+                None, which will cause an appropriate value to be
+                chosen automatically (typically 0.1 to 1.0).
+            az_start (str): part of the scan to start at.  To start at one
+                of the extremes, use 'az_endpoint1', 'az_endpoint2', or
+                'end' (same as 'az_endpoint1').  To start in the midpoint
+                of the scan use 'mid_inc' (for first half-leg to have
+                positive az velocity), 'mid_dec' (negative az velocity),
+                or 'mid' (velocity oriented towards endpoint2).
+            az_drift (float): if set, this should be a drift velocity
+                in deg/s.  The scan extrema will move accordingly.  This
+                can be used to better follow compact sources as they
+                rise or set through the focal plane.
+            scan_type (int): What type of scan to use. Only 1, 2, 3 are valid.
+                Type 1 is a constant elevation scan.
+                Type 2 includes a variation in az speed that scales as sin(az).
+                Type 3 is a Type 2 with an sinusoidal el nod.
+            az_vel_ref (float or None): azimuth to center the velocity profile at.
+                If None then the average of the endpoints is used.
+            turnaround_method (str): The method used for generating turnaround.
+                Default (None) generates the baseline minimal jerk trajectory.
+                'standard' uses the acu standard turnaround generation (same as None).
+                'standard_gen' generates a track_point list of points that mimics
+                the acu standard turnaround generation for use in type2/type3 scans.
+                'three_leg' generates a three-leg turnaround which attempts to
+                minimize the acceleration at the midpoint of the turnaround.
+                'two_leg' generates a three-leg turnaround with second_leg_time = 0.
+            scan_upload_length (float): number of seconds for each set
+                of uploaded points. If this is not specified, the
+                track manager will try to use as short a time as is
+                reasonable.
+            type (int): Temporary alias for scan_type. Do not
+                use. Will be removed.
+
+        Notes:
+          Note that all parameters are optional except for
+          az_endpoint1 and az_endpoint2.  If only those two parameters
+          are passed, the Process will scan between those endpoints,
+          with the elevation axis held in Stop, indefinitely (until
+          Process .stop method is called)..
+
+        """
+        init_time = time.time()  # for params feed.
+
+        # if self._get_sun_policy('motion_blocked'):
+        #     return False, "Motion blocked; Sun avoidance in progress."
+
+        if params['type'] is not None:
+            self.log.warn('Caller passed "type" instead of "scan_type" arg; moving.')
+            params['scan_type'] = params['type']
+        del params['type']
+
+        self.log.info('User scan params: {params}', params=params)
+
+        az_endpoint1 = params['az_endpoint1']
+        az_endpoint2 = params['az_endpoint2']
+        el_endpoint1 = params['el_endpoint1']
+        el_endpoint2 = params['el_endpoint2']
+        az_vel_ref = params['az_vel_ref']
+
+        # Params with defaults configured ...
+        az_speed = params['az_speed']
+        az_accel = params['az_accel']
+        el_freq = params['el_freq']
+        turnaround_method = params['turnaround_method']
+        el_mode = params['el_mode']
+        if az_speed is None:
+            az_speed = self.scan_params['az_speed']
+        if az_accel is None:
+            az_accel = self.scan_params['az_accel']
+        if el_freq is None:
+            el_freq = self.scan_params['el_freq']
+        if turnaround_method is None:
+            turnaround_method = self.scan_params['turnaround_method']
+            if params['scan_type'] in [2, 3] and turnaround_method == 'standard':
+                turnaround_method = 'standard_gen'
+                self.log.info('Setting turnaround_method="standard_gen" for type2/3 scan.')
+        if el_mode is None:
+            el_mode = self.scan_params['el_mode']  # ... which may also be None.
+
+        # Check if the turnaround method is usable for the called scan type.
+        # This should never happen with the above turnaround_method setting.
+        if turnaround_method == "standard" and params['scan_type'] != 1:
+            raise ValueError("Cannot use standard turnaround method with type 2 or 3 scans!")
+
+        # Do we need to limit the az_accel?  This limit comes from a
+        # maximum jerk parameter; the equation below (without the
+        # empirical 0.85 adjustment) is stated in the SATP ACU ICD.
+        min_turnaround_time = (0.85 * az_speed / 9 * 11.616)**.5
+        max_turnaround_accel = 2 * az_speed / min_turnaround_time
+
+        # You must also not exceed the platform max accel.
+        if self.motion_limits['azimuth'].get('accel'):
+            max_turnaround_accel = min(
+                max_turnaround_accel,
+                self.motion_limits['azimuth'].get('accel') / 1.88)
+
+        if az_accel > max_turnaround_accel:
+            self.log.warn('WARNING: user requested accel=%.2f; limiting to %.2f' %
+                          (az_accel, max_turnaround_accel))
+            az_accel = max_turnaround_accel
+
+        # If el is not specified, drop in the current elevation.
+        if el_endpoint1 is None:
+            el_endpoint1 = self.data['status']['summary']['Elevation_current_position']
+        if el_endpoint2 is None:
+            el_endpoint2 = el_endpoint1
+
+        # If requested el is just outside acceptable range, tweak it in.
+        _f, _ = self._get_limit_func('elevation')
+        el_endpoint1, _untweaked_el = _f(el_endpoint1), el_endpoint1
+        if abs(el_endpoint1 - _untweaked_el) > 0.1:
+            return False, "Current elevation (%.4f) is well outside limits." % _untweaked_el
+        init_el = el_endpoint1
+
+        scan_upload_len = params.get('scan_upload_length')
+        scan_params = {k: params.get(k) for k in [
+            'num_scans', 'num_batches', 'start_time',
+            'wait_to_start', 'step_time', 'batch_size',
+            'az_start', 'az_drift']
+            if params.get(k) is not None}
+        if params['scan_type'] in [2, 3]:
+            scan_params["az_start"] = "mid_dec"
+        el_speed = params.get('el_speed', 0.0)
+        az_edge_speed = az_speed
+        if params['scan_type'] in [2, 3]:
+            if az_vel_ref is None:
+                az_vel_ref = (az_endpoint1 + az_endpoint2) / 2.
+            az_cent = az_vel_ref - 90
+            az_edge = np.max(np.abs((az_endpoint1 - az_cent, az_endpoint2 - az_cent)))
+            az_edge_speed = az_speed / np.sin(az_edge)
+
+        plan = sh.plan_scan(az_endpoint1, az_endpoint2,
+                            el=el_endpoint1, v_az=az_edge_speed, a_az=az_accel,
+                            az_start=scan_params.get('az_start'),
+                            scan_type=params['scan_type'])
+
+        # Use the plan to set scan upload parameters.
+        if scan_params.get('step_time') is None:
+            scan_params['step_time'] = plan['step_time']
+        if scan_params.get('wait_to_start') is None:
+            scan_params['wait_to_start'] = plan['wait_to_start']
+
+        step_time = scan_params['step_time']
+        point_batch_count = None
+        if scan_upload_len:
+            point_batch_count = scan_upload_len / step_time
+
+        self.log.info('The plan: {plan}', plan=plan)
+        self.log.info('The scan_params: {scan_params}', scan_params=scan_params)
+
+        # Clear faults.
+        self.log.info('Clearing faults to prepare for motion.')
+        yield self.acu_control.clear_faults()
+        yield dsleep(1)
+
+        # Verify we're good to move
+        ok, msg = yield self._check_ready_motion(session)
+        if not ok:
+            return False, msg
+
+        # Seek to starting position.  Note "legs" will always include
+        # at least 2 points; first point being current (az, el).
+        self.log.info(f'Moving to start position, az={plan["init_az"]}, el={init_el}')
+        legs, msg = yield self._get_sunsafe_moves(plan['init_az'], init_el)
+        if msg is not None:
+            self.log.error(msg)
+            return False, msg
+
+        ''' ####################################################################
+        NOTE: the "leg" here refers to the vector generated from the telescopes
+        current position to the starting point of the scan.  This is not a "leg" 
+        in the sense of the turnaround legs in the scan pattern.
+        #################################################################### '''
+        for leg_az, leg_el in legs[1:]:
+            ok, msg = yield self._go_to_axes(session, az=leg_az, el=leg_el)
+            if not ok:
+                return False, f'Start position seek failed with message: {msg}'
+
+        # Force elevation axis to stop mode?
+        if el_mode:
+            for k in ['Stop', 'Preset', 'ProgramTrack']:
+                if el_mode.lower() == k.lower():
+                    yield self._set_modes(el=k)
+                    break
+            else:
+                return False, f'User requested invalid el_mode={el_mode}'
+
+        # Prepare the point generator.
+        free_form = False
+        if params['scan_type'] == 1 & params['subtype'] == 'cmb':
+            track_axes = ['az']
+            if turnaround_method != 'standard':
+                free_form = True
+
+            g = sh.generate_constant_velocity_scan(az_endpoint1=az_endpoint1,
+                                                   az_endpoint2=az_endpoint2,
+                                                   az_speed=az_speed, acc=az_accel,
+                                                   turnaround_method=turnaround_method,
+                                                   el_endpoint1=el_endpoint1,
+                                                   el_endpoint2=el_endpoint2,
+                                                   el_speed=el_speed,
+                                                   az_first_pos=plan['init_az'],
+                                                   **scan_params)
+            ''' "g" is a generator that yields (az, el, time_from_start) tuples for the track manager. 
+                Grahams new method needs to output this same TrackPoint class object to be used with 
+                _run_track
+            '''            
+
+        elif params['scan_type'] == 1 & params['subtype'] == 'cal':
+            track_axes = ['az']
+            if turnaround_method != 'standard':
+                free_form = True
+
+            ''' ####################################################################
+            This is the new method from Graham using FYST Trajectories
+            This combines the generate_scan logic from SO needed to properly construct
+            the CE Source drift scan blocks in the output observing script
+            #################################################################### '''
+            from astropy.time import Time
+            from fyst_trajectories import Coordinates, get_fyst_site
+            from fyst_trajectories.offsets import compute_focal_plane_rotation, detector_to_boresight
+            from fyst_trajectories.patterns import ConstantElScanConfig, TrajectoryBuilder
+            from fyst_trajectories.primecam import get_primecam_offset
+
+            site = get_fyst_site()
+            coords = Coordinates(site)
+            observation_time = Time("2026-03-15T00:00:00", scale="utc")
+
+            # Get planet position using ephemeris
+            planet_az, planet_el = coords.get_body_altaz("jupiter", observation_time)
+            planet_ra, planet_dec = coords.get_body_radec("jupiter", observation_time)
+
+            # Compute focal plane rotation (mechanical only, no parallactic angle for planets)
+            offset = get_primecam_offset("i1")
+            parallactic_angle = coords.get_parallactic_angle(planet_ra, planet_dec, observation_time)
+            field_rotation = compute_focal_plane_rotation(
+                el=planet_el, site=site, offset=offset, parallactic_angle=parallactic_angle
+            )
+
+            # Compute boresight position so detector I1 sees the planet
+            bore_az, bore_el = detector_to_boresight(
+                det_az=planet_az, det_el=planet_el,
+                offset=offset,
+                field_rotation=field_rotation,
+            )
+
+            # Set up scan centered on boresight position
+            config = ConstantElScanConfig(
+                timestep=0.1,
+                az_start=bore_az - 5.0,
+                az_stop=bore_az + 5.0,
+                elevation=bore_el,
+                az_speed=0.5,
+                az_accel=0.3,
+                n_scans=4,
+            )
+
+            trajectory = (
+                TrajectoryBuilder(site)
+                .with_config(config)
+                .duration(600.0)
+                .starting_at(observation_time)
+                .build()
+            )
+
+            g = sh.trajectory_to_track_points(trajectory)
+            ''' ####################################################################'''
+        
+        elif params['scan_type'] == 2:
+            free_form = True
+            track_axes = ['az']
+            g = sh.generate_type2_scan(az_endpoint1=az_endpoint1,
+                                       az_endpoint2=az_endpoint2,
+                                       az_speed=az_speed, acc=az_accel,
+                                       turnaround_method=turnaround_method,
+                                       el_endpoint1=el_endpoint1,
+                                       az_vel_ref=az_vel_ref,
+                                       az_first_pos=plan['init_az'],
+                                       **scan_params)
+        elif params['scan_type'] == 3:
+            free_form = True
+            track_axes = ['az', 'el']
+            g = sh.generate_type3_scan(az_endpoint1=az_endpoint1,
+                                       az_endpoint2=az_endpoint2,
+                                       az_speed=az_speed, acc=az_accel,
+                                       turnaround_method=turnaround_method,
+                                       el_endpoint1=el_endpoint1,
+                                       el_endpoint2=el_endpoint2,
+                                       el_freq=el_freq,
+                                       az_vel_ref=az_vel_ref,
+                                       az_first_pos=plan['init_az'],
+                                       **scan_params)
+        else:
+            raise ValueError("Scan type must be 1, 2, or 3")
+
+        scan_params_bundle = {'session_id': session.session_id,
+                              'schema': 1,
+                              'event': 1,
+                              'init_time': init_time,
+                              }
+        scan_params_bundle.update({
+            'az1': az_endpoint1,
+            'az2': az_endpoint2,
+            'az_vel': az_speed,
+            'az_accel': az_accel,
+            'el1': el_endpoint1,
+            'el2': el_endpoint2,
+            'el_freq': el_freq,
+            'type': params['scan_type'],
+            'turnaround_type': sh.TURNAROUNDS_ENUM[turnaround_method],
+            'track_axes': ','.join(track_axes),
+        })
+
+        self.agent.publish_to_feed('scan_params',
+                                   {'timestamp': time.time(),
+                                    'block_name': 'info',
+                                    'data': scan_params_bundle})
+
+        ret_val = (yield self._run_track(
+            session=session, point_gen=g, step_time=step_time, stop_accel=az_accel,
+            track_axes=track_axes, point_batch_count=point_batch_count,
+            free_form=free_form, unabort_failure=(params['scan_type'] in [2, 3])))
+
+        self.agent.publish_to_feed('scan_params',
+                                   {'timestamp': time.time(),
+                                    'block_name': 'exit',
+                                    'data': {'session_id': session.session_id,
+                                             'event': 2}})
+        return ret_val
 
 def add_agent_args(parser_in=None):
     if parser_in is None:

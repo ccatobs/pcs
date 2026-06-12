@@ -1,6 +1,10 @@
 # dynamic package version
 pcs/_version.py
 
+# Docker build dependencies
+
+docker/rfsoc_controller/ccatkidlib
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

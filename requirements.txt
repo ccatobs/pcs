@@ -1,10 +1,12 @@
 # core dependencies
 autobahn[serialization]
 ocs
+socs==0.5.2
 sqlalchemy>=1.4
 twisted
 
 # hardware communication
+redis
 pyserial
 requests
 # Versions pinned to match socs - do we need to keep these? They are quite outdated.

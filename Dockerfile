@@ -7,7 +7,8 @@ FROM simonsobs/ocs:v0.11.3-19-gd729e04
 
 # Install addition network related packages for ACU interface agent
 RUN apt-get update -y && apt-get install -y iputils-ping \
-    curl
+    curl \
+    rsync
 
 # Copy in and install requirements
 COPY requirements.txt /app/pcs/requirements.txt

@@ -8,6 +8,14 @@ import socket, struct, requests
 
 cache = None
 
+#: Per-request HTTP timeout (seconds) for TCS calls. Without it a hung Go TCS
+#: blocks the synchronous requests call indefinitely, freezing the reactor thread
+#: and every Process on it, including the 200 Hz broadcast the constant_el_scan
+#: slew gate polls. The (connect, read) tuple bounds both phases; the read budget
+#: is generous so a slow-but-alive TCS is not killed mid-response (the scan loops
+#: have their own wall-clock backstops on top).
+TCS_HTTP_TIMEOUT = (5, 30)  # (connect, read) seconds
+
 def load_config(filename=None, update_cache=True):
     '''Load ACU configuration file and return the settings content
     as dict.
@@ -113,7 +121,8 @@ class observatory_control_system:
 
         try:
             response = self.session.post(
-                    f"{self.url}{cmd}", json=data, verify=self.verify_cert #allow_redirects=True
+                    f"{self.url}{cmd}", json=data, verify=self.verify_cert, #allow_redirects=True
+                    timeout=TCS_HTTP_TIMEOUT
                     )
             self.log.debug(f"response code: {response.status_code}")
         except requests.exceptions.RequestException as e:
@@ -133,7 +142,9 @@ class observatory_control_system:
         # cmd = "http://127.0.0.1:8100/Values?identifier=DataSets.StatusGeneral8100&format=JSON"
         #self.log.info(f"getting status from {self.url}{cmd}")
         try:
-            self.status = self.session.get(self.url + cmd, verify=self.verify_cert).json()
+            self.status = self.session.get(
+                    self.url + cmd, verify=self.verify_cert, timeout=TCS_HTTP_TIMEOUT
+                    ).json()
             #self.status = self.session.get(cmd, verify=self.verify_cert).json()
         except requests.exceptions.ConnectionError as e:
             self.log.error(
@@ -162,7 +173,11 @@ class observatory_control_system:
         cmd = f"{self.url_prefix}/move-to"
         data = {"azimuth": azimuth, "elevation": elevation}
         response = self.post(cmd, data)
-        self.log.info(response.json())
+        # ``post`` returns {} (not a Response) on HTTP 503; guard the .json()
+        # log so a 503 from /move-to does not raise AttributeError inside the
+        # client. The caller's status guard then handles the {} gracefully.
+        if hasattr(response, "json"):
+            self.log.info(response.json())
         return response
 
     def azimuth_scan(self, start_time: float, elevation: float,
@@ -190,7 +205,6 @@ class observatory_control_system:
         return response
 
     def scan_pattern(self, data):
-        dt = datetime.datetime.now() + datetime.timedelta(seconds=10)
         cmd = f"{self.url_prefix}/path"
         self.log.info(data)
         response = self.post(cmd, data)
@@ -213,9 +227,11 @@ class observatory_control_system:
                 "coordsys": "Horizon",
                 "points": points
                 }
-        self.scan_pattern(data)
-
-        return
+        # Return scan_pattern's value (Response on success, {} on a 503
+        # short-circuit) instead of None, matching every other command method, so
+        # the caller can read the status via tcs_response_status. Returning None
+        # made msg.status_code crash on EVERY call.
+        return self.scan_pattern(data)
 
 
 

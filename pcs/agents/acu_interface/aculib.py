@@ -78,9 +78,11 @@ class observatory_control_system:
         verify_cert (bool): Whether to set up TLS verification,
             default is True.
     '''
-    def __init__(self, url, log, server_cert="", client_cert="", 
-                 client_key="", tcs_direct=False, verify_cert=True):
+    def __init__(self, url, log, server_cert="", client_cert="",
+                 client_key="", tcs_direct=False, verify_cert=True,
+                 readonly_url=None):
         self.url = url
+        self.readonly_url = readonly_url
         self.server_cert = server_cert
         self.client_cert = client_cert
         self.client_key = client_key
@@ -97,6 +99,10 @@ class observatory_control_system:
             self.url_prefix = ""
         else:
             self.url_prefix = "/api/v1/telescope"
+
+        # Separate unauthenticated session for direct ACU hardware queries.
+        self.readonly_session = requests.Session()
+        self.readonly_session.verify = False
 
     def start_session(self):
         if self.server_cert == "" or self.client_cert == "" \
@@ -136,8 +142,28 @@ class observatory_control_system:
 
         return response
 
+    def Values(self, dataset_id):
+        if self.readonly_url is None:
+            self.log.error("readonly_url not configured, cannot call Values()")
+            sys.exit(-1)
+        try:
+            response = self.readonly_session.get(
+                self.readonly_url + "/Values",
+                params={"identifier": dataset_id, "type": "DataSet", "format": "JSON"},
+            )
+            data = response.json()
+            if "err" in data:
+                self.log.warn(f"Values({dataset_id}): {data['err']}")
+                return {}
+            return data
+        except requests.exceptions.ConnectionError:
+            self.log.error(
+                f"failed to connect on {self.readonly_url} check is ACU hardware up, exiting"
+            )
+            sys.exit(-1)
+
     def get_status(self):
-        cmd = f"{self.url_prefix}/acu/status"
+        cmd = f"{self.url_prefix}/status"
         #cmd = "/Values?identifier=DataSets.StatusGeneral8100&format=JSON"
         # cmd = "http://127.0.0.1:8100/Values?identifier=DataSets.StatusGeneral8100&format=JSON"
         #self.log.info(f"getting status from {self.url}{cmd}")

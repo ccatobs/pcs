@@ -43,6 +43,7 @@ from threading import Thread
 #import acu modules
 from pcs.agents.acu_interface import aculib
 from pcs.agents.acu_interface import drivers as drv
+from pcs.agents.acu_interface.run_track import _run_track
 
 # FYST typed scans: ocs-free dispatch cores + the completion
 # latch and constants (so the Process poll loop and the unit-testable decision
@@ -84,10 +85,11 @@ MONITOR_STRUCTURE = [
     ('ACU_general_errors', 'ACU_failures_errors', None, None),
     ('ACU_platform_status', 'platform_status', None, None),
     ('ACU_emergency', 'ACU_emergency', None, None),
-    ('ACU_tilt', 'tilt_slow', 'changed', 0.5),
-    (None, 'tilt_fast', None, None),
     ('ACU_sun_avoidance', 'sun_avoidance', None, 1.),
     ('ACU_corrections', 'corrections', None, 10.),
+    ('ACU_shutter', 'shutter', None, 1.),
+    ('ACU_hvac', 'hvac', None, 60.),
+    ('ACU_faults', 'faults', None, None),
 ]
 
 #: Maximum update time (in s) for "monitor" process data, even with no changes
@@ -130,8 +132,10 @@ class ACUAgent:
             If True, immediately start the main monitoring processes
             for status and UDP data.
     """
-    def __init__(self, agent, config, device='acu_sim', startup=False):
+    def __init__(self, agent, config, device='acu_sim', startup=False, obs_plan=None, run_config=None):
         self.agent = agent
+        self.obs_plan = obs_plan
+        self.run_config = run_config
         #logging
         self.log = agent.log
         #get the config settings
@@ -149,12 +153,13 @@ class ACUAgent:
         # Tried to add self.acu_read with the observatory_control_system class in pcs aculib
         # Since it seems to have the same function as AcuControl
 
-        self.acu_read = aculib.observatory_control_system(url=self.acu_conf['base_url'], 
-                                                          log=self.log, 
+        self.acu_read = aculib.observatory_control_system(url=self.acu_conf['base_url'],
+                                                          log=self.log,
                                                           server_cert=self.acu_conf['certs']['server_cert'],
                                                           client_cert=self.acu_conf['certs']['client_cert'],
                                                           client_key=self.acu_conf['certs']['client_key'],
-                                                          verify_cert=False
+                                                          verify_cert=False,
+                                                          readonly_url=self.acu_conf.get('readonly_url'),
                                                           )
         
         ###########################################################################
@@ -190,7 +195,10 @@ class ACUAgent:
         '''
         self.datasets = {
             'status': _dsets.get('default_dataset'), # this grabs 'DataSets.StatusDetailed'
-            # 'pointing': _dsets.get('pointing_dataset'),
+            'pointing': 'pointing',
+            'shutter': 'shutter',
+            'hvac': 'hvac',
+            'faults': 'faults',
         }
         for k, v in self.datasets.items():
             if v is not None:
@@ -293,6 +301,10 @@ class ACUAgent:
         # running. Mid-scan abort normally goes via stopping the scan Process.
         agent.register_task('abort',
                             self.abort,
+                            blocking=False,
+                            aborter=self._simple_task_abort)
+        agent.register_task('stop_and_clear',
+                            self.stop_and_clear,
                             blocking=False,
                             aborter=self._simple_task_abort)
         #agg. params
@@ -495,8 +507,11 @@ class ACUAgent:
         def _get_status():
             output = {}
             for short, collection in [
-                    ('status', 'StatusGeneral8100'), # this is what's in session.data already
-                    #('pointing', 'CmdPointingCorrection'), #we commented this out above for some reason (see line 119)
+                    ('status', 'StatusCCatDetailed8100'),
+                    ('pointing', 'CmdPointingCorrection'),
+                    ('shutter', 'StatusShutter'),
+                    ('hvac', 'Hvac'),
+                    ('faults', 'StatusDetailedFaults'),
             ]:
                 #if self.datasets[short]:
                  #   output[collection] = (
@@ -1534,6 +1549,63 @@ class ACUAgent:
         return False, 'abort: Go TCS /abort failed (transport error; see log).'
 
 
+    @ocs_agent.param('all_axes', default=False, type=bool)
+    @inlineCallbacks
+    def stop_and_clear(self, session, params):
+        """stop_and_clear(all_axes=False)
+
+        **Task** - Change the azimuth, elevation, and 3rd axis modes
+        to Stop; also clear the ProgramTrack stack.
+
+        Args:
+          all_axes (bool): Send Stop to all axes, even ones user has
+            requested to be ignored.
+
+        """
+        def _read_modes():
+            modes = [self.data['status']['summary']['Azimuth_mode'],
+                     self.data['status']['summary']['Elevation_mode']]
+            if self.acu_config['platform'] == 'satp':
+                modes.append(self.data['status']['summary']['Boresight_mode'])
+            elif self.acu_config['platform'] in ['ccat', 'lat']:
+                modes.append(self.data['status']['corotator']['Corotator_mode'])
+            return modes
+
+        for i in range(6):
+            for short_name, mode in zip(['az', 'el', 'third'],
+                                        _read_modes()):
+                if (params['all_axes'] or short_name not in self.ignore_axes) and mode != 'Stop':
+                    break
+            else:
+                self.log.info('All axes in Stop mode')
+                break
+            yield self._stop(params['all_axes'])
+            self.log.info('Stop called (iteration %i)' % (i + 1))
+            yield dsleep(0.1)
+
+        else:
+            msg = 'Failed to set all axes to Stop mode!'
+            self.log.error(msg)
+            return False, msg
+
+        for i in range(6):
+            free_stack = self.data['status']['summary']['Free_upload_positions']
+            if free_stack < FULL_STACK:
+                yield self.acu_control.http.Command('DataSets.CmdTimePositionTransfer',
+                                                    'Clear Stack')
+                self.log.info('Clear Stack called (iteration %i)' % (i + 1))
+                yield dsleep(0.1)
+            else:
+                self.log.info('Stack cleared')
+                break
+        else:
+            msg = 'Failed to clear the ProgramTrack stack!'
+            self.log.warn(msg)
+            return False, msg
+
+        session.set_status('stopping')
+        return True, 'Job completed'
+
 def add_agent_args(parser_in=None):
     if parser_in is None:
         parser_in = argparse.ArgumentParser()
@@ -1543,6 +1615,14 @@ def add_agent_args(parser_in=None):
     pgroup.add_argument("--no-processes", action='store_true',
                         default=False)
     pgroup.add_argument("--device", type=str, default="acu-sim")
+    pgroup.add_argument("--obs-plan", type=str, default=None,
+                        help="Path to obs plan txt file (temp_schedule.txt). "
+                             "If set, the current source name is read from this "
+                             "file at the start of each generate_scan.")
+    pgroup.add_argument("--run-config", type=str, default=None,
+                        help="Path to run config yaml (e.g. run_lat.yaml). "
+                             "If set, the module list is read from this file "
+                             "at the start of each generate_scan.")
     
     return parser_in
 
@@ -1552,9 +1632,16 @@ def main(args=None):
                                   parser=parser,
                                   args=args)
     agent, runner = ocs_agent.init_site_agent(args)
+    lat_sched_in_dir = os.environ.get('LAT_SCHED_IN_DIR')
+    obs_plan = args.obs_plan or (
+        os.path.join(lat_sched_in_dir, 'temp_schedule.txt') if lat_sched_in_dir else None
+    )
+    run_config = args.run_config or os.environ.get('LAT_RUN_CONFIG')
     _ = ACUAgent(agent, args.acu_config,
                  device = args.device,
-                 startup=not args.no_processes)
+                 startup=not args.no_processes,
+                 obs_plan=obs_plan,
+                 run_config=run_config)
 
     runner.run(agent, auto_reconnect=True)
 

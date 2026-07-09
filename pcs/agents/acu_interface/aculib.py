@@ -142,40 +142,16 @@ class observatory_control_system:
 
         return response
 
-    def Values(self, dataset_id):
-        if self.readonly_url is None:
-            self.log.error("readonly_url not configured, cannot call Values()")
-            sys.exit(-1)
-        try:
-            response = self.readonly_session.get(
-                self.readonly_url + "/Values",
-                params={"identifier": dataset_id, "type": "DataSet", "format": "JSON"},
-            )
-            data = response.json()
-            if "err" in data:
-                self.log.warn(f"Values({dataset_id}): {data['err']}")
-                return {}
-            return data
-        except requests.exceptions.ConnectionError:
-            self.log.error(
-                f"failed to connect on {self.readonly_url} check is ACU hardware up, exiting"
-            )
-            sys.exit(-1)
-
     def get_status(self):
         cmd = f"{self.url_prefix}/status"
-        #cmd = "/Values?identifier=DataSets.StatusGeneral8100&format=JSON"
-        # cmd = "http://127.0.0.1:8100/Values?identifier=DataSets.StatusGeneral8100&format=JSON"
-        #self.log.info(f"getting status from {self.url}{cmd}")
+        self.log.info(f"getting status from {self.url}{cmd}")
         try:
             self.status = self.session.get(
                     self.url + cmd, verify=self.verify_cert, timeout=TCS_HTTP_TIMEOUT
                     ).json()
-            #self.status = self.session.get(cmd, verify=self.verify_cert).json()
         except requests.exceptions.ConnectionError as e:
             self.log.error(
                     f"failed to connect on {self.url} check is server up, exiting"
-                    #f"failed to connect on {cmd} check is server up, exiting"
                     )
             sys.exit(-1)
         return self.status

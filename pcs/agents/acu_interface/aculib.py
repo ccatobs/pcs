@@ -135,10 +135,16 @@ class observatory_control_system:
             raise SystemExit(e)
         self.log.debug(f"{response.text}")
         if response.status_code == 503:
-            self.log.warning(response.json().get("message", ""))
+            try:
+                self.log.warning(response.json().get("message", ""))
+            except Exception:
+                pass
             return {}
-        if response.json().get("status", "") == "error":
-            self.log.error(response.json().get("message", ""))
+        try:
+            if response.json().get("status", "") == "error":
+                self.log.error(response.json().get("message", ""))
+        except Exception:
+            pass
 
         return response
 
@@ -146,14 +152,17 @@ class observatory_control_system:
         cmd = f"{self.url_prefix}/status"
         self.log.info(f"getting status from {self.url}{cmd}")
         try:
-            self.status = self.session.get(
+            r = self.session.get(
                     self.url + cmd, verify=self.verify_cert, timeout=TCS_HTTP_TIMEOUT
-                    ).json()
+                    )
         except requests.exceptions.ConnectionError as e:
             self.log.error(
                     f"failed to connect on {self.url} check is server up, exiting"
                     )
             sys.exit(-1)
+        if r.status_code != 200:
+            raise RuntimeError(f"get_status: HTTP {r.status_code}")
+        self.status = r.json()
         return self.status
 
     

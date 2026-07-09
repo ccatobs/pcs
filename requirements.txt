@@ -18,7 +18,7 @@ numpy
 # For ACU interface agent
 astropy
 pyyaml
-soaculib @ git+https://github.com/simonsobs/soaculib.git@master
+fyst-trajectories @ git+https://github.com/ccatobs/fyst-trajectories.git@5aac1b6
 
 # For Dymo scale agent
 pyusb

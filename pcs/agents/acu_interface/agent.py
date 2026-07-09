@@ -148,7 +148,7 @@ class ACUAgent:
                 continue
             self.data['status'][k] = {}
 
-        _dsets = self.config['datasets']
+        _dsets = self.config['datasets'][self.platform_type]
         '''
         datasets:
         ccat:
@@ -274,10 +274,17 @@ class ACUAgent:
                             record=True,
                             agg_params=fullstatus_agg_params,
                             buffer_time=1)
-
+        agent.register_feed('acu_status_influx',
+                            record=True,
+                            agg_params=influx_agg_params,
+                            buffer_time=1)
         agent.register_feed('acu_udp_stream',
                             record=True,
                             agg_params=fullstatus_agg_params,
+                            buffer_time=1)
+        agent.register_feed('acu_broadcast_influx',
+                            record=True,
+                            agg_params=influx_agg_params,
                             buffer_time=1)
         agent.register_feed('acu_error',
                             record=True,
@@ -418,7 +425,7 @@ class ACUAgent:
                     self.data['status'][group][field] = value
 
             self.data['status']['summary']['ctime'] = \
-                drv.timecode(self.data['status']['summary']['Time'])
+                status['timestamp'] / 1e9
 
             # Check for state changes in some key fields.
             new_checkdata = {k: self.data['status'][g].get(k)
@@ -478,6 +485,13 @@ class ACUAgent:
 
             for block in new_blocks.values():
                 self.agent.publish_to_feed('acu_status', block)
+                influx_block = {
+                    'timestamp': block['timestamp'],
+                    'block_name': block['block_name'],
+                    'data': {k + '_influx': v for k, v in block['data'].items()},
+                }
+                if influx_block['data']:
+                    self.agent.publish_to_feed('acu_status_influx', influx_block)
 
             data_blocks.update(new_blocks)
 
@@ -579,6 +593,7 @@ class ACUAgent:
                                         'block_name': 'ACU_bcast_influx',
                                         'data': influx_means,
                                         }
+                self.agent.publish_to_feed('acu_broadcast_influx', acu_broadcast_influx)
                 sd = {}
                 for ky in influx_means:
                     sd[ky.split('_bcast_influx')[0]] = influx_means[ky]
@@ -592,7 +607,14 @@ class ACUAgent:
                 if not active and params['auto_enable'] and next_reconfig <= time.time():
                     self.log.info('Requesting UDP stream enable.')
                     try:
-                        handler = reactor.listenUDP(int(udp_port), MonitorUDP())
+                        tcs_reconfig = self._make_tcs()
+                        tcs_reconfig.session.post(
+                            f"{self.acu_conf['base_url']}/api/v1/telescope/acu/position-broadcast",
+                            json={'destination_host': udp_host,
+                                  'destination_port': int(udp_port)},
+                            verify=False,
+                            timeout=aculib.TCS_HTTP_TIMEOUT,
+                        )
                     except Exception as err:
                         self.log.info('Exception while trying to enable stream: {err}', err=err)
                     next_reconfig += 60
@@ -827,8 +849,8 @@ class ACUAgent:
         # keep propagating).
         try:
             status = tcs.get_status()
-            az = status.get('Azimuth current position')
-            el = status.get('Elevation current position')
+            az = status.get('AzimuthCurrentPosition')
+            el = status.get('ElevationCurrentPosition')
             if az is not None and el is not None:
                 return float(az), float(el), 'status'
         except (Exception, SystemExit) as e:
@@ -850,8 +872,8 @@ class ACUAgent:
         because the 200 Hz broadcast carries no velocity, so the velocity half of
         the Go TCS arrival condition can only come from a status read.
         """
-        vaz = status.get('Azimuth current velocity')
-        vel = status.get('Elevation current velocity')
+        vaz = status.get('AzimuthCurrentVelocity')
+        vel = status.get('ElevationCurrentVelocity')
         return (vaz is not None and abs(vaz) < TCS_SPEED_TOL
                 and vel is not None and abs(vel) < TCS_SPEED_TOL)
 
@@ -926,16 +948,20 @@ class ACUAgent:
 
             # Build the trajectory + sun-safe slew target off the reactor thread.
             site = get_fyst_site()
+            scan_params = dict(params['scan_params'])
+            max_dispatch_delay_sec = scan_params.pop('max_dispatch_delay_sec', None)
+            build_kwargs = dict(
+                scan_params=scan_params,
+                current_az=current_az,
+                current_el=current_el,
+                site=site,
+                scheduled_t0_unix=params.get('scheduled_t0_unix'),
+                now_unix=time.time(),
+            )
+            if max_dispatch_delay_sec is not None:
+                build_kwargs['max_dispatch_delay_sec'] = max_dispatch_delay_sec
             try:
-                result = yield threads.deferToThread(
-                    build_fn,
-                    scan_params=params['scan_params'],
-                    current_az=current_az,
-                    current_el=current_el,
-                    site=site,
-                    scheduled_t0_unix=params.get('scheduled_t0_unix'),
-                    now_unix=time.time(),
-                )
+                result = yield threads.deferToThread(build_fn, **build_kwargs)
             except Exception as e:
                 self.log.error(f'{job}: trajectory build failed: {e}')
                 return False, f'Trajectory build failed: {e}'
@@ -1063,13 +1089,11 @@ class ACUAgent:
                     # RAW /acu/status free-stack key is the long ACU alias 'Qty of
                     # free program track stack positions'; accept either that or
                     # the post-mapping 'Free_upload_positions'.
-                    free = status.get('Qty of free program track stack positions')
-                    if free is None:
-                        free = status.get('Free_upload_positions')
-                    vaz = status.get('Azimuth current velocity')
-                    vel = status.get('Elevation current velocity')
-                    az_mode = status.get('Azimuth mode')
-                    el_mode = status.get('Elevation mode')
+                    free = status.get('QtyOfFreeProgramTrackStackPositions')
+                    vaz = status.get('AzimuthCurrentVelocity')
+                    vel = status.get('ElevationCurrentVelocity')
+                    az_mode = status.get('AzimuthMode')
+                    el_mode = status.get('ElevationMode')
                     if latch.update(free=free, vaz=vaz, vel=vel, now_unix=time.time(),
                                     az_mode=az_mode, el_mode=el_mode):
                         self.log.info(f'{job}: scan complete (stack drained).')

@@ -31,6 +31,7 @@ Developer Guide        Information relevant to developers who are contributing t
 
    user/intro
    user/installation
+   user/pcs_web
 
 .. toctree::
    :maxdepth: 2

@@ -9,6 +9,8 @@ FROM simonsobs/ocs:v0.11.3-19-gd729e04
 RUN apt-get update -y && apt-get install -y iputils-ping \
     curl
 
+RUN apt-get install -y libusb-1.0-0-dev libusb-1.0-0 && rm -rf /var/lib/apt/lists/*1~RUN apt-get update && apt-get install -y libusb-1.0-0-dev libusb-1.0-0 && rm -rf /var/lib/apt/lists/*
+
 # Copy in and install requirements
 COPY requirements.txt /app/pcs/requirements.txt
 WORKDIR /app/pcs/

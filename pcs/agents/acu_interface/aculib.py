@@ -1,12 +1,20 @@
 #!/bin/python
 
-import os, yaml
-import time
+import os, yaml, json, sys
+import time, datetime
 import socket, struct, requests
 
 #: Global variable to hold the most-recent config block from calling
 
 cache = None
+
+#: Per-request HTTP timeout (seconds) for TCS calls. Without it a hung Go TCS
+#: blocks the synchronous requests call indefinitely, freezing the reactor thread
+#: and every Process on it, including the 200 Hz broadcast the constant_el_scan
+#: slew gate polls. The (connect, read) tuple bounds both phases; the read budget
+#: is generous so a slow-but-alive TCS is not killed mid-response (the scan loops
+#: have their own wall-clock backstops on top).
+TCS_HTTP_TIMEOUT = (5, 30)  # (connect, read) seconds
 
 def load_config(filename=None, update_cache=True):
     '''Load ACU configuration file and return the settings content
@@ -70,9 +78,11 @@ class observatory_control_system:
         verify_cert (bool): Whether to set up TLS verification,
             default is True.
     '''
-    def __init__(self, url, log, server_cert="", client_cert="", 
-                 client_key="", tcs_direct=False, verify_cert=True):
+    def __init__(self, url, log, server_cert="", client_cert="",
+                 client_key="", tcs_direct=False, verify_cert=True,
+                 readonly_url=None):
         self.url = url
+        self.readonly_url = readonly_url
         self.server_cert = server_cert
         self.client_cert = client_cert
         self.client_key = client_key
@@ -89,6 +99,10 @@ class observatory_control_system:
             self.url_prefix = ""
         else:
             self.url_prefix = "/api/v1/telescope"
+
+        # Separate unauthenticated session for direct ACU hardware queries.
+        self.readonly_session = requests.Session()
+        self.readonly_session.verify = False
 
     def start_session(self):
         if self.server_cert == "" or self.client_cert == "" \
@@ -113,32 +127,45 @@ class observatory_control_system:
 
         try:
             response = self.session.post(
-                    f"{self.url}{cmd}", json=data, verify=self.verify_cert #allow_redirects=True
+                    f"{self.url}{cmd}", json=data, verify=self.verify_cert, #allow_redirects=True
+                    timeout=TCS_HTTP_TIMEOUT
                     )
             self.log.debug(f"response code: {response.status_code}")
         except requests.exceptions.RequestException as e:
             raise SystemExit(e)
         self.log.debug(f"{response.text}")
         if response.status_code == 503:
-            self.log.warning(response.json().get("message", ""))
+            try:
+                self.log.warning(response.json().get("message", ""))
+            except Exception:
+                pass
             return {}
-        if response.json().get("status", "") == "error":
-            self.log.error(response.json().get("message", ""))
+        try:
+            if response.json().get("status", "") == "error":
+                self.log.error(response.json().get("message", ""))
+        except Exception:
+            pass
 
         return response
 
     def get_status(self):
-        cmd = f"{self.url_prefix}/acu/status"
+        cmd = f"{self.url_prefix}/status"
         self.log.info(f"getting status from {self.url}{cmd}")
         try:
-            self.status = self.session.get(self.url + cmd, verify=self.verify_cert).json()
+            r = self.session.get(
+                    self.url + cmd, verify=self.verify_cert, timeout=TCS_HTTP_TIMEOUT
+                    )
         except requests.exceptions.ConnectionError as e:
             self.log.error(
                     f"failed to connect on {self.url} check is server up, exiting"
                     )
             sys.exit(-1)
+        if r.status_code != 200:
+            raise RuntimeError(f"get_status: HTTP {r.status_code}")
+        self.status = r.json()
         return self.status
 
+    
     def abort(self):
         cmd = f"{self.url_prefix}/abort"
         r = self.post(cmd, "")
@@ -157,7 +184,11 @@ class observatory_control_system:
         cmd = f"{self.url_prefix}/move-to"
         data = {"azimuth": azimuth, "elevation": elevation}
         response = self.post(cmd, data)
-        self.log.info(response.json())
+        # ``post`` returns {} (not a Response) on HTTP 503; guard the .json()
+        # log so a 503 from /move-to does not raise AttributeError inside the
+        # client. The caller's status guard then handles the {} gracefully.
+        if hasattr(response, "json"):
+            self.log.info(response.json())
         return response
 
     def azimuth_scan(self, start_time: float, elevation: float,
@@ -185,7 +216,6 @@ class observatory_control_system:
         return response
 
     def scan_pattern(self, data):
-        dt = datetime.datetime.now() + datetime.timedelta(seconds=10)
         cmd = f"{self.url_prefix}/path"
         self.log.info(data)
         response = self.post(cmd, data)
@@ -208,9 +238,11 @@ class observatory_control_system:
                 "coordsys": "Horizon",
                 "points": points
                 }
-        self.scan_pattern(data)
-
-        return
+        # Return scan_pattern's value (Response on success, {} on a 503
+        # short-circuit) instead of None, matching every other command method, so
+        # the caller can read the status via tcs_response_status. Returning None
+        # made msg.status_code crash on EVERY call.
+        return self.scan_pattern(data)
 
 
 

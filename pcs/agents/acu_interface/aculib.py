@@ -173,6 +173,19 @@ class observatory_control_system:
         self.log.info(response)
         return response
 
+    def position_broadcast(self, udp_host: str, udp_port: int):
+        """Switch ON the position broadcasting from the TCS
+            :param udp_host
+            :param udp_port
+        """
+        data = {"destination_host": udp_host,
+                "destination_port": udp_port}
+        cmd = f"{self.url_prefix}/acu/position-broadcast"
+
+        print ("COMING HERE?")
+        response = self.post(cmd, data)
+        self.log.info(response.json())
+        return response
 
     def move_to(self, azimuth: float, elevation: float):
         """send telescope to a given azimuth,elevation

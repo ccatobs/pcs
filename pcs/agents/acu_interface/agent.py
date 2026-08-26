@@ -235,17 +235,22 @@ class ACUAgent:
                                startup=False)
 
         #register tasks
+        agent.register_task('tcs_broadcast',
+                            self.tcs_broadcast,
+                            blocking=True,
+                            aborter=self._simple_task_abort)
+
         agent.register_task('go_to',
                             self.go_to,
                             blocking=True,
                             aborter=self._simple_task_abort)
         agent.register_task('az_scan',
                             self.az_scan,
-                            blocking=False,
+                            blocking=True,
                             aborter=self._simple_task_abort)
         agent.register_task('fromfile_scan',
                             self.fromfile_scan,
-                            blocking=False,
+                            blocking=True,
                             aborter=self._simple_task_abort)
         # FYST dedicated abort task. Standalone /abort escape
         # hatch (the shared _safe_abort path); safe to call with no scan
@@ -624,6 +629,39 @@ class ACUAgent:
         handler.stopListening()
         #self.agent.feeds['acu_udp_stream'].flush_buffer()
         return True, 'Acquisition exited cleanly.'
+
+    @ocs_agent.param('udp_host', type=str)
+    @ocs_agent.param('udp_port', type=int)
+    def tcs_broadcast(self, session, params):
+        """tcs_broadcast(udp_host, udp_port)
+
+        **Task** - Switch ON the position data stream broadcasting from
+        the TCS api. With the given UDP host address and port, the ACU
+        starts broadcasting the posotion data stream that the interface
+        agent can listen to and write the stream in the PCS HK.
+
+        Parameters:
+            udp_host (str): UDP host address
+            udp_port (int): udp port number
+        """
+        udp_host = params['udp_host']
+        udp_port = params['udp_port']
+
+        self.log.info(f'Requested TCS broadcasting to switch ON at UDP host: {udp_host}, port: {udp_port}')
+        certs = self.acu_conf['certs']
+
+        tcs = aculib.observatory_control_system(
+                    self.acu_conf['base_url'],
+                    self.log,
+                    server_cert=certs['server_cert'],
+                    client_cert=certs['client_cert'],
+                    client_key=certs['client_key'],
+                    verify_cert=certs['verify']
+                    )
+        msg = tcs.position_broadcast(udp_host, udp_port)
+        self.log.info(f"UDP stream broadcasting executed with response code: {msg.status_code}")
+
+        return True, msg.text
 
     @ocs_agent.param('az', type=float)
     @ocs_agent.param('el', type=float)
@@ -1347,3 +1385,6 @@ def main(args=None):
 
 if __name__=='__main__':
     main()
+
+
+

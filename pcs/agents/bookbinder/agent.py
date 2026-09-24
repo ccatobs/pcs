@@ -368,7 +368,7 @@ def make_parser(parser=None):
     pgroup.add_argument('--sess-id', type=str, help='rfsoc_controller sess_id')
     pgroup.add_argument('--obs-end-time', type=float, help='observation end time')
     pgroup.add_argument('--output-root', type=str, help='h5 output root directory')
-    pgroup.add_argument('--output-log', type=str, help='log root directory')
+    pgroup.add_argument('--log-root', type=str, help='log root directory')
     pgroup.add_argument('--compression', type=str, help='compression algorithm')
     return parser
 

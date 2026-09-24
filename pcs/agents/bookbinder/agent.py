@@ -16,7 +16,7 @@ def read_g3_frames_from_file(fname, num_frames=None):
     Read a g3 file (fname) and return a list of all the frames within.
     If num_frames is an integer, read and return only that many frames.
     """
-    g3f = core.G3File(fname)
+    g3f = spt3g.core.G3File(fname)
     frames = []
     if num_frames is None:
         i = 0

@@ -73,11 +73,6 @@ class BookbinderAgent:
         self.to_bind = 'all'
         self.boards_to_include = 'all'
         #
-        self.hk_files = None
-        self.det_dir = os.path.join(det_root, det_date, sess_id)
-        self.det_time_start = int(sess_id)
-        self.det_time_end = float(self.obs_end_time)
-        self.h5_output = os.path.join(output_root, f'level0_{sess_id}.h5')
 
     def status_for_binding(self):
         status = True
@@ -99,6 +94,12 @@ class BookbinderAgent:
         self.sess_id = params['sess_id']
         self.obs_end_time = float(params['det_name'])
         self.compression = params['compression']
+        #
+        self.hk_files = None
+        self.det_dir = os.path.join(self.det_root, self.det_name, self.det_date, self.sess_id)
+        self.det_time_start = int(self.sess_id)
+        self.det_time_end = float(self.obs_end_time)
+        self.h5_output = os.path.join(output_root, f'level0_{sess_id}.h5')
         #
         if not self.status_for_binding():
             return

@@ -401,7 +401,7 @@ def main(args=None):
     #                                  log_root = args.log_root,
     #                                  compression = args.compression,
     #                                  )
-    agent, runner = ocs_agent.init_site_agent()
+    agent, runner = ocs_agent.init_site_agent(None)
     agent.register_task('bind', bookbinder.bind())
     runner.run(agent, auto_reconnect=True)
 

@@ -102,7 +102,7 @@ class BookbinderAgent:
         self.det_dir = os.path.join(self.det_root, self.det_name, self.det_date, self.sess_id)
         self.det_time_start = int(self.sess_id)
         self.det_time_end = float(self.obs_end_time)
-        self.h5_output = os.path.join(output_root, f'level0_{sess_id}.h5')
+        self.h5_output = os.path.join(self.output_root, f'level0_{sess_id}.h5')
         #
         if not self.status_for_binding():
             return

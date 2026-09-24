@@ -89,12 +89,14 @@ class BookbinderAgent:
     @ocs_agent.param('sess_id', default='', type=str)
     @ocs_agent.param('obs_end_time', default='', type=str)
     @ocs_agent.param('compression', default='gzip', type=str)
+    @ocs_agent.param('output_root', default='', type=str)
     def bind(self, session, params):
         self.det_name = params['det_name']
         self.det_date = params['det_date']
         self.sess_id = params['sess_id']
         self.obs_end_time = float(params['obs_end_time'])
         self.compression = params['compression']
+        self.output_root = params['output_root']
         #
         self.hk_files = None
         self.det_dir = os.path.join(self.det_root, self.det_name, self.det_date, self.sess_id)

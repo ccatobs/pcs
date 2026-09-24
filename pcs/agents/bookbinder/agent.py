@@ -391,9 +391,9 @@ def main(args=None):
     parser = make_parser()
     args = site_config.parse_args(agent_class='BookbinderAgent', parser=parser, args=args)
     #agent, runner = ocs_agent.init_site_agent(args)
-    # bookbinder = BookbinderAgent(agent,
-    #                                  hk_root = args.hk_root,
-    #                                  det_root = args.det_root,
+    bookbinder = BookbinderAgent(agent,
+                                     hk_root = args.hk_root,
+                                     det_root = args.det_root)
     #                                  det_date = args.det_date,
     #                                  sess_id = args.sess_id,
     #                                  obs_end_time = args.obs_end_time,

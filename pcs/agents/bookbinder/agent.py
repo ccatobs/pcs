@@ -1,4 +1,3 @@
-import g3utils
 import h5py
 import json
 import numpy as np
@@ -11,6 +10,46 @@ import spt3g.core
 import argparse
 from ocs import ocs_agent, site_config
 from ocs.ocs_twisted import TimeoutLock
+
+def read_g3_frames_from_file(fname, num_frames=None):
+    """
+    Read a g3 file (fname) and return a list of all the frames within.
+    If num_frames is an integer, read and return only that many frames.
+    """
+    g3f = core.G3File(fname)
+    frames = []
+    if num_frames is None:
+        i = 0
+        try:
+            while True:
+                frame = g3f.next()
+                frames.append(frame)
+                i += 1
+        except StopIteration:
+            pass
+    else:
+        try:
+            for i in range(num_frames):
+                frame = g3f.next()
+                frames.append(frame)
+        except StopIteration:
+            pass
+    return frames
+
+def read_and_join_g3_frames_from_directory(dirname, return_filenames=False):
+    """
+    Extracts frames from all g3 files in a directory and returns a list of frames.
+    File names are sorted lexographically before frame extraction.
+    """
+    files = sorted(glob.glob(os.path.join(dirname, '*.g3')))
+    frames = []
+    for f in files:
+        _frames = read_g3_frames_from_file(f)
+        frames.extend(_frames)
+    if return_filenames:
+        return frames, files
+    else:
+        return frames
 
 class BookbinderAgent:
     """
@@ -100,7 +139,7 @@ class BookbinderAgent:
                 bd = os.path.split(bd_dir)[-1]
                 # /timestream/{bd}
                 bd_group = h5f.create_group(f'/timestream/{bd}', track_order=True)
-                frames, det_files = g3utils.read_and_join_g3_frames_from_directory(bd_dir, return_filenames=True)
+                frames, det_files = read_and_join_g3_frames_from_directory(bd_dir, return_filenames=True)
                 num_frames = len(frames)
                 bd_group.attrs['det_files'] = json.dumps(det_files)
                 bd_group.attrs['num_frames'] = num_frames
@@ -246,7 +285,7 @@ class BookbinderAgent:
         #
         frames = []
         for hkf in self.hk_files:
-            fr = g3utils.read_frames(hkf)
+            fr = read_frames_from_g3_file(hkf)
             frames.extend(fr)
             #
         with h5py.File(self.h5_output, file_mode, track_order=True) as h5f:

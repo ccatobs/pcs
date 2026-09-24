@@ -8,6 +8,6 @@ agents = {
     'DymoAgent': {'module': 'pcs.agents.dymo.agent', 'entry_point': 'main'},
     'TeledyneAgent': {'module': 'pcs.agents.teledyne.agent', 'entry_point': 'main'},
     'PfeifferAgent': {'module': 'pcs.agents.pfeiffer_singlegauge.agent', 'entry_point': 'main'},
-    'Adam_Agent':{'module': 'pcs.agents.adam.agent', 'entry_point': 'main'}
+    'Adam_Agent':{'module': 'pcs.agents.adam.agent', 'entry_point': 'main'},
     'BookbinderAgent':{'module': 'pcs.agents.bookbinder.agent', 'entry_point': 'main'}
 }

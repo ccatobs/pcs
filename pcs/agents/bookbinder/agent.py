@@ -93,7 +93,7 @@ class BookbinderAgent:
         self.det_name = params['det_name']
         self.det_date = params['det_date']
         self.sess_id = params['sess_id']
-        self.obs_end_time = float(params['det_name'])
+        self.obs_end_time = float(params['obs_end_time'])
         self.compression = params['compression']
         #
         self.hk_files = None

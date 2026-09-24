@@ -402,7 +402,7 @@ def main(args=None):
     #                                  log_root = args.log_root,
     #                                  compression = args.compression,
     #                                  )
-    agent.register_task('bind', bookbinder.bind())
+    agent.register_task('bind', bookbinder.bind)
     runner.run(agent, auto_reconnect=True)
 
 

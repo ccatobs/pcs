@@ -390,7 +390,7 @@ def make_parser(parser=None):
 def main(args=None):
     parser = make_parser()
     args = site_config.parse_args(agent_class='BookbinderAgent', parser=parser, args=args)
-    #agent, runner = ocs_agent.init_site_agent(args)
+    agent, runner = ocs_agent.init_site_agent(args)
     bookbinder = BookbinderAgent(agent,
                                      hk_root = args.hk_root,
                                      det_root = args.det_root)
@@ -401,8 +401,6 @@ def main(args=None):
     #                                  log_root = args.log_root,
     #                                  compression = args.compression,
     #                                  )
-    #args = site_config.parse_args(agent_class='BookbinderAgent', args=args)
-    agent, runner = ocs_agent.init_site_agent(args)
     agent.register_task('bind', bookbinder.bind())
     runner.run(agent, auto_reconnect=True)
 

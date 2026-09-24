@@ -73,6 +73,7 @@ class BookbinderAgent:
         self.to_bind = 'all'
         self.boards_to_include = 'all'
         #
+        print(self.hk_root, self.det_root)
 
     def status_for_binding(self):
         status = True

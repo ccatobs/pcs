@@ -24,6 +24,11 @@ fyst-trajectories @ git+https://github.com/ccatobs/fyst-trajectories.git@5aac1b6
 pyusb
 libusb
 
+# For bookbinder agent
+h5py
+so3g
+spt3g
+
 # Docs
 # see docs/requirements.txt
 

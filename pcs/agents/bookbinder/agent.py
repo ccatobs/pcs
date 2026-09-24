@@ -56,31 +56,22 @@ class BookbinderAgent:
     Class to carry out level0 bookbinding from raw detector and housekeeping (hk) data, producing a single HDF5 book
     """
 
-    def __init__(self, agent,
-                       hk_root = None,
-                       det_root = None,
-                       det_date = None,
-                       sess_id = None,
-                       obs_end_time = None,
-                       output_root = None,
-                       log_root = None,
-                       compression='gzip',
-                       compression_opts=None):
+    def __init__(self, agent):
         self.agent = agent
         self.log = agent.log
         self.lock = TimeoutLock()
         #
-        self.hk_root = hk_root
-        self.det_root = det_root
-        self.det_date = det_date
-        self.sess_id = sess_id
-        self.obs_end_time = obs_end_time
-        self.output_root = output_root
-        self.log_root = log_root
+        #self.hk_root = hk_root
+        #self.det_root = det_root
+        #self.output_root = None
+        self.det_name = None
+        self.det_date = None
+        self.sess_id = None
+        self.obs_end_time = None
+        self.compression = 'gzip'
+        self.compression_opts = None
         self.to_bind = 'all'
         self.boards_to_include = 'all'
-        self.compression = compression
-        self.compression_opts = compression_opts
         #
         self.hk_files = None
         self.det_dir = os.path.join(det_root, det_date, sess_id)
@@ -88,7 +79,30 @@ class BookbinderAgent:
         self.det_time_end = float(self.obs_end_time)
         self.h5_output = os.path.join(output_root, f'level0_{sess_id}.h5')
 
+    def status_for_binding(self):
+        status = True
+        for field in [self.hk_root,
+                           self.det_root, self.det_name, self.det_date, self.sess_id,
+                           self.obs_end_time, self.output_root]:
+            if field is None:
+                status = status and False
+        return status
+
+    @ocs_agent.param('det_name', default='', type=str)
+    @ocs_agent.param('det_date', default='', type=str)
+    @ocs_agent.param('sess_id', default='', type=str)
+    @ocs_agent.param('obs_end_time', default='', type=str)
+    @ocs_agent.param('compression', default='gzip', type=str)
     def bind(self, session, params):
+        self.det_name = params['det_name']
+        self.det_date = params['det_date']
+        self.sess_id = params['sess_id']
+        self.obs_end_time = float(params['det_name'])
+        self.compression = params['compression']
+        #
+        if not self.status_for_binding():
+            return
+        #
         self.find_associated_hk_files()
         self.bind_timestream_data(file_mode='w')
         self.bind_hk_data(file_mode='a')
@@ -374,21 +388,23 @@ def make_parser(parser=None):
 
 
 def main(args=None):
-    parser = make_parser()
-    args = site_config.parse_args(agent_class='BookbinderAgent', parser=parser, args=args)
-    agent, runner = ocs_agent.init_site_agent(args)
-    bookbinder = BookbinderAgent(agent,
-                                     hk_root = args.hk_root,
-                                     det_root = args.det_root,
-                                     det_date = args.det_date,
-                                     sess_id = args.sess_id,
-                                     obs_end_time = args.obs_end_time,
-                                     output_root = args.output_root,
-                                     log_root = args.log_root,
-                                     compression = args.compression,
-                                     )
+    #parser = make_parser()
+    #args = site_config.parse_args(agent_class='BookbinderAgent', parser=parser, args=args)
+    #agent, runner = ocs_agent.init_site_agent(args)
+    # bookbinder = BookbinderAgent(agent,
+    #                                  hk_root = args.hk_root,
+    #                                  det_root = args.det_root,
+    #                                  det_date = args.det_date,
+    #                                  sess_id = args.sess_id,
+    #                                  obs_end_time = args.obs_end_time,
+    #                                  output_root = args.output_root,
+    #                                  log_root = args.log_root,
+    #                                  compression = args.compression,
+    #                                  )
+    agent, runner = ocs_agent.init_site_agent()
     agent.register_task('bind', bookbinder.bind())
     runner.run(agent, auto_reconnect=True)
+
 
 
 if __name__ == '__main__':

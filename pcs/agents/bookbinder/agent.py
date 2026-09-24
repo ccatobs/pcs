@@ -56,13 +56,13 @@ class BookbinderAgent:
     Class to carry out level0 bookbinding from raw detector and housekeeping (hk) data, producing a single HDF5 book
     """
 
-    def __init__(self, agent):
+    def __init__(self, agent, hk_root, det_root):
         self.agent = agent
         self.log = agent.log
         self.lock = TimeoutLock()
         #
-        #self.hk_root = hk_root
-        #self.det_root = det_root
+        self.hk_root = hk_root
+        self.det_root = det_root
         #self.output_root = None
         self.det_name = None
         self.det_date = None

@@ -8,11 +8,8 @@ import so3g
 import spt3g
 import spt3g.core
 import argparse
-from ocs.ocs_agent import param_decorator
 from ocs import ocs_agent, site_config
 from ocs.ocs_twisted import TimeoutLock
-from twisted.internet.defer import inlineCallbacks
-from twisted.internet import reactor, defer
 
 def read_g3_frames_from_file(fname, num_frames=None):
     """
@@ -54,12 +51,6 @@ def read_and_join_g3_frames_from_directory(dirname, return_filenames=False):
     else:
         return frames
 
-def d_sleep(dtime):
-    """A non-blocking sleep helper that yields control back to Twisted."""
-    d = defer.Deferred()
-    reactor.callLater(dtime, d.callback, None)
-    return d
-
 class BookbinderAgent:
     """
     Class to carry out level0 bookbinding from raw detector and housekeeping (hk) data, producing a single HDF5 book
@@ -83,30 +74,6 @@ class BookbinderAgent:
         self.boards_to_include = 'all'
         #
         print(self.hk_root, self.det_root)
-        self.agent.register_task('process_files_delayed', self.process_files_delayed)
-
-    @ocs_agent.param_decorator()
-    @inlineCallbacks
-    def process_files_delayed(self, session, params):
-        session.set_status('running')
-        
-        # Pull the wait time from parameters, defaulting to 10 seconds
-        
-        hk_cadence = 15*60
-        buffer = 5*60
-        wait_time = params.get('wait_time', hk_cadence + buffer) 
-        print(f"Task initiated. Pausing for {wait_time} seconds until files are ready...")
-        
-        # --- THE NON-BLOCKING DELAY ---
-        # The agent steps aside here. Your client script moves on instantly, 
-        # and the agent remains completely responsive to other network requests.
-        yield d_sleep(wait_time)
-        
-        # --- RESUME OPERATION ---
-        print("Wait time complete. Executing file processing...")
-        # Put the code that actually opens and processes the files here
-        
-        return True, "Task completed after scheduled delay."
 
     def status_for_binding(self):
         status = True

@@ -8,6 +8,7 @@ import so3g
 import spt3g
 import spt3g.core
 import argparse
+from ocs.ocs_agent import param_decorator
 from ocs import ocs_agent, site_config
 from ocs.ocs_twisted import TimeoutLock
 from twisted.internet.defer import inlineCallbacks

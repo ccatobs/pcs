@@ -107,6 +107,10 @@ class BookbinderAgent:
         if not self.status_for_binding():
             return
         #
+        hk_cadence = 15*60
+        buffer = 5*60
+        time.sleep(hk_cadence + buffer)
+        #
         self.find_associated_hk_files()
         self.bind_timestream_data(file_mode='w')
         self.bind_hk_data(file_mode='a')
@@ -407,7 +411,7 @@ def main(args=None):
     #                                  log_root = args.log_root,
     #                                  compression = args.compression,
     #                                  )
-    agent.register_task('bind', bookbinder.bind)
+    agent.register_task('bind', bookbinder.bind, blocking=False)
     runner.run(agent, auto_reconnect=True)
 
 

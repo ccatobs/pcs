@@ -303,7 +303,7 @@ class BookbinderAgent:
         #
         frames = []
         for hkf in self.hk_files:
-            fr = read_frames_from_g3_file(hkf)
+            fr = read_g3_frames_from_file(hkf)
             frames.extend(fr)
             #
         with h5py.File(self.h5_output, file_mode, track_order=True) as h5f:

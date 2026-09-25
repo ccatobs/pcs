@@ -114,6 +114,8 @@ class BookbinderAgent:
         self.bind_targ_data(file_mode='a')
         self.bind_vna_data(file_mode='a')
         self.bind_log_data(file_mode='a')
+
+        return True, 'Book bound'
         
     def find_associated_hk_files(self):
         """

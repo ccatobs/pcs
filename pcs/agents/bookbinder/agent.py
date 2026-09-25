@@ -59,7 +59,7 @@ class BookbinderAgent:
     def __init__(self, agent, hk_root, det_root):
         self.agent = agent
         self.log = agent.log
-        #self.lock = TimeoutLock()
+        self.lock = TimeoutLock()
         #
         self.hk_root = hk_root
         self.det_root = det_root
@@ -407,7 +407,7 @@ def main(args=None):
     #                                  log_root = args.log_root,
     #                                  compression = args.compression,
     #                                  )
-    agent.register_task('bind', bookbinder.bind, blocking=False)
+    agent.register_task('bind', bookbinder.bind)
     runner.run(agent, auto_reconnect=True)
 
 

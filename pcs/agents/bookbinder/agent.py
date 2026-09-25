@@ -10,6 +10,8 @@ import spt3g.core
 import argparse
 from ocs import ocs_agent, site_config
 from ocs.ocs_twisted import TimeoutLock
+from twisted.internet.defer import inlineCallbacks
+from twisted.internet import reactor, defer
 
 def read_g3_frames_from_file(fname, num_frames=None):
     """

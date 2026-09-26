@@ -10,6 +10,7 @@ import spt3g.core
 import argparse
 from ocs import ocs_agent, site_config
 from ocs.ocs_twisted import TimeoutLock
+from twisted.internet import threads
 
 def read_g3_frames_from_file(fname, num_frames=None):
     """
@@ -97,15 +98,19 @@ class BookbinderAgent:
         self.obs_end_time = float(params['obs_end_time'])
         self.compression = params['compression']
         self.output_root = params['output_root']
-        #
         self.hk_files = None
         self.det_dir = os.path.join(self.det_root, self.det_name, self.det_date, self.sess_id)
         self.det_time_start = int(self.sess_id)
         self.det_time_end = float(self.obs_end_time)
         self.h5_output = os.path.join(self.output_root, f'level0_{self.sess_id}.h5')
         #
-        if not self.status_for_binding():
-            return
+        d = threads.deferToThread(self._bind_processing)
+        return d
+
+    def _bind_processing(self):
+        #
+        #if not self.status_for_binding():
+        #    return
         #
         self.find_associated_hk_files()
         self.bind_timestream_data(file_mode='w')
@@ -114,7 +119,7 @@ class BookbinderAgent:
         self.bind_targ_data(file_mode='a')
         self.bind_vna_data(file_mode='a')
         self.bind_log_data(file_mode='a')
-
+        #
         return True, 'Book bound'
         
     def find_associated_hk_files(self):

@@ -114,7 +114,7 @@ class BookbinderAgent:
         #if not self.status_for_binding():
         #    return
         #
-        time.sleep(self.hk_cadence + self.hk_buffer)
+        #time.sleep(self.hk_cadence + self.hk_buffer)
         self.find_associated_hk_files()
         self.bind_timestream_data(file_mode='w')
         self.bind_hk_data(file_mode='a')

@@ -106,7 +106,7 @@ class BookbinderAgent:
         self.det_time_end = float(self.obs_end_time)
         self.h5_output = os.path.join(self.output_root, f'level0_{self.sess_id}.h5')
         #
-        d = threads.deferToThread(self._bind_processing)
+        d = threads.deferToThread(self._bind_processing, session)
         return d
 
     def _bind_processing(self):
@@ -114,7 +114,7 @@ class BookbinderAgent:
         #if not self.status_for_binding():
         #    return
         #
-        #time.sleep(self.hk_cadence + self.hk_buffer)
+        time.sleep(self.hk_cadence + self.hk_buffer)
         self.find_associated_hk_files()
         self.bind_timestream_data(file_mode='w')
         self.bind_hk_data(file_mode='a')

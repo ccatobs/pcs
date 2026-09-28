@@ -10,7 +10,7 @@ import spt3g.core
 import argparse
 from ocs import ocs_agent, site_config
 from ocs.ocs_twisted import TimeoutLock
-from twisted.internet import threads
+#from twisted.internet import threads
 
 def read_g3_frames_from_file(fname, num_frames=None):
     """
@@ -106,8 +106,10 @@ class BookbinderAgent:
         self.det_time_end = float(self.obs_end_time)
         self.h5_output = os.path.join(self.output_root, f'level0_{self.sess_id}.h5')
         #
-        d = threads.deferToThread(self._bind_processing, session)
-        return d
+        #d = threads.deferToThread(self._bind_processing, session)
+        #return d
+        status, message = self._bind_processing()
+        return status, message
 
     def _bind_processing(self):
         #

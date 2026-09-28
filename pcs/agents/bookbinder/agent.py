@@ -8,6 +8,7 @@ import so3g
 import spt3g
 import spt3g.core
 import argparse
+import time
 from ocs import ocs_agent, site_config
 from ocs.ocs_twisted import TimeoutLock
 #from twisted.internet import threads

@@ -9,9 +9,9 @@ import spt3g
 import spt3g.core
 import argparse
 import time
+import queue
 from ocs import ocs_agent, site_config
 from ocs.ocs_twisted import TimeoutLock
-#from twisted.internet import threads
 
 def read_g3_frames_from_file(fname, num_frames=None):
     """
@@ -61,6 +61,7 @@ class BookbinderAgent:
     def __init__(self, agent, hk_root, det_root):
         self.agent = agent
         self.log = agent.log
+        self.job_queue = queue.Queue()
         #self.lock = TimeoutLock()
         #
         self.hk_root = hk_root
@@ -79,6 +80,17 @@ class BookbinderAgent:
         #
         print(self.hk_root, self.det_root)
 
+    @ocs_agent.param('det_name', default='', type=str)
+    @ocs_agent.param('det_date', default='', type=str)
+    @ocs_agent.param('sess_id', default='', type=str)
+    @ocs_agent.param('obs_end_time', default='', type=str)
+    @ocs_agent.param('compression', default='gzip', type=str)
+    @ocs_agent.param('output_root', default='', type=str)
+    def add_to_queue(self, session, params):
+        job_packet = dict(params)
+        self.job_queue.put(job_packet)
+        return True, f"Job session {job_packet['sess_id']} successfully queued"
+
     def status_for_binding(self):
         status = True
         for field in [self.hk_root,
@@ -88,19 +100,22 @@ class BookbinderAgent:
                 status = status and False
         return status
 
-    @ocs_agent.param('det_name', default='', type=str)
-    @ocs_agent.param('det_date', default='', type=str)
-    @ocs_agent.param('sess_id', default='', type=str)
-    @ocs_agent.param('obs_end_time', default='', type=str)
-    @ocs_agent.param('compression', default='gzip', type=str)
-    @ocs_agent.param('output_root', default='', type=str)
     def bind(self, session, params):
-        self.det_name = params['det_name']
-        self.det_date = params['det_date']
-        self.sess_id = params['sess_id']
-        self.obs_end_time = float(params['obs_end_time'])
-        self.compression = params['compression']
-        self.output_root = params['output_root']
+        session.set_status('running')
+        self.log.info('Bookbinder.bind started')
+        #
+        while session.status == 'running':
+            try:
+                job = self.job_queue.get(timeout=1.0)
+            except queue.Empty:
+                continue
+
+        self.det_name = job['det_name']
+        self.det_date = job['det_date']
+        self.sess_id = job['sess_id']
+        self.obs_end_time = float(job['obs_end_time'])
+        self.compression = job['compression']
+        self.output_root = job['output_root']
         self.hk_files = None
         self.det_dir = os.path.join(self.det_root, self.det_name, self.det_date, self.sess_id)
         self.det_time_start = int(self.sess_id)
@@ -126,7 +141,7 @@ class BookbinderAgent:
         self.bind_vna_data(file_mode='a')
         self.bind_log_data(file_mode='a')
         #
-        return True, 'Book bound'
+        return True, f'Book bound: {self.sess_id}'
         
     def find_associated_hk_files(self):
         """

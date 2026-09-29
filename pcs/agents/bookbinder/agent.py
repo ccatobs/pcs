@@ -116,7 +116,6 @@ class BookbinderAgent:
             self.sess_id = job['sess_id']
             self.obs_end_time = float(job['obs_end_time'])
             self.compression = job['compression']
-            self.output_root = job['output_root']
             self.hk_files = None
             self.det_dir = os.path.join(self.det_root, self.det_name, self.det_date, self.sess_id)
             self.det_time_start = int(self.sess_id)
@@ -126,6 +125,7 @@ class BookbinderAgent:
             #d = threads.deferToThread(self._bind_processing, session)
             #return d
             status, message = self._bind_processing()
+            print(status, message)
         return status, message
 
     def _bind_processing(self):

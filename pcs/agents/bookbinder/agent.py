@@ -58,7 +58,7 @@ class BookbinderAgent:
     Class to carry out level0 bookbinding from raw detector and housekeeping (hk) data, producing a single HDF5 book
     """
 
-    def __init__(self, agent, hk_root, det_root):
+    def __init__(self, agent, hk_root, det_root, output_root):
         self.agent = agent
         self.log = agent.log
         self.job_queue = queue.Queue()
@@ -66,7 +66,7 @@ class BookbinderAgent:
         #
         self.hk_root = hk_root
         self.det_root = det_root
-        #self.output_root = None
+        self.output_root = output_root
         self.det_name = None
         self.det_date = None
         self.sess_id = None
@@ -78,7 +78,7 @@ class BookbinderAgent:
         self.hk_cadence = 5*60
         self.hk_buffer = 1*60
         #
-        print(self.hk_root, self.det_root)
+        print(self.hk_root, self.det_root, self.output_root)
 
     @ocs_agent.param('det_name', default='', type=str)
     @ocs_agent.param('det_date', default='', type=str)
@@ -431,7 +431,8 @@ def main(args=None):
     agent, runner = ocs_agent.init_site_agent(args)
     bookbinder = BookbinderAgent(agent,
                                      hk_root = args.hk_root,
-                                     det_root = args.det_root)
+                                     det_root = args.det_root,
+                                     output_root = args.output_root)
     #                                  det_date = args.det_date,
     #                                  sess_id = args.sess_id,
     #                                  obs_end_time = args.obs_end_time,

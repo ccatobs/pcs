@@ -75,8 +75,8 @@ class BookbinderAgent:
         self.compression_opts = None
         self.to_bind = 'all'
         self.boards_to_include = 'all'
-        self.hk_cadence = 5*60
-        self.hk_buffer = 1*60
+        self.hk_cadence = 1 # 5*60
+        self.hk_buffer = 0 # 1*60
         #
         print(self.hk_root, self.det_root)
 

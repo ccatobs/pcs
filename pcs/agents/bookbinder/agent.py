@@ -100,7 +100,7 @@ class BookbinderAgent:
                 status = status and False
         return status
 
-    def bind(self, session, params):
+    def run_bind_queue(self, session, params):
         session.set_status('running')
         self.log.info('Bookbinder.bind started')
         #
@@ -434,7 +434,9 @@ def main(args=None):
     #                                  compression = args.compression,
     #                                  )
     #agent.register_task('bind', bookbinder.bind, blocking=False)
-    agent.register_task('bind', bookbinder.bind)
+    #agent.register_task('bind', bookbinder.bind)
+    agent.register_task('add_to_queue', bookbinder.add_to_queue)
+    agent.register_process('run_pipeline', bookbinder.run_bind_queue)
     runner.run(agent, auto_reconnect=True)
 
 

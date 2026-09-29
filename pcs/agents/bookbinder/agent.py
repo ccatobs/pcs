@@ -416,10 +416,10 @@ def make_parser(parser=None):
     pgroup = parser.add_argument_group('Agent Options')
     pgroup.add_argument('--hk-root', type=str, help='hk root directory')
     pgroup.add_argument('--det-root', type=str, help='detector_data root directory')
+    pgroup.add_argument('--output-root', type=str, help='h5 output root directory')
     #pgroup.add_argument('--det-date', type=str, help='detector date - subdirectory name')
     #pgroup.add_argument('--sess-id', type=str, help='rfsoc_controller sess_id')
     #pgroup.add_argument('--obs-end-time', type=float, help='observation end time')
-    #pgroup.add_argument('--output-root', type=str, help='h5 output root directory')
     #pgroup.add_argument('--log-root', type=str, help='log root directory')
     #pgroup.add_argument('--compression', type=str, help='compression algorithm')
     return parser

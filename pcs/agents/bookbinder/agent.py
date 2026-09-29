@@ -142,6 +142,10 @@ class BookbinderAgent:
         self.bind_log_data(file_mode='a')
         #
         return True, f'Book bound: {self.sess_id}'
+
+    def stop_process(self, session, params):
+        session.set_status('stopping')
+        return True, "Requesting processing loop to stop."
         
     def find_associated_hk_files(self):
         """

@@ -109,7 +109,6 @@ class BookbinderAgent:
                 job = self.job_queue.get(timeout=1.0)
                 print(time.time(), job)
             except queue.Empty:
-                print(time.time(), 'nothing in queue')
                 continue
 
         self.det_name = job['det_name']
@@ -134,6 +133,7 @@ class BookbinderAgent:
         #if not self.status_for_binding():
         #    return
         #
+        print('beginning _bind_processing')
         time.sleep(self.hk_cadence + self.hk_buffer)
         self.find_associated_hk_files()
         self.bind_timestream_data(file_mode='w')
@@ -443,6 +443,7 @@ def main(args=None):
     #agent.register_task('bind', bookbinder.bind)
     agent.register_task('add_to_queue', bookbinder.add_to_queue)
     agent.register_process('run_pipeline', bookbinder.run_bind_queue, bookbinder.stop_process)
+    agent.register_task('stop_process', bookbinder.stop_process)
     runner.run(agent, auto_reconnect=True)
 
 

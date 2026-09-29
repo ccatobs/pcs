@@ -440,7 +440,7 @@ def main(args=None):
     #agent.register_task('bind', bookbinder.bind, blocking=False)
     #agent.register_task('bind', bookbinder.bind)
     agent.register_task('add_to_queue', bookbinder.add_to_queue)
-    agent.register_process('run_pipeline', bookbinder.run_bind_queue)
+    agent.register_process('run_pipeline', bookbinder.run_bind_queue, bookbinder.stop_process)
     runner.run(agent, auto_reconnect=True)
 
 

@@ -107,7 +107,9 @@ class BookbinderAgent:
         while session.status == 'running':
             try:
                 job = self.job_queue.get(timeout=1.0)
+                print(time.time(), job)
             except queue.Empty:
+                print(time.time(), 'nothing in queue')
                 continue
 
         self.det_name = job['det_name']

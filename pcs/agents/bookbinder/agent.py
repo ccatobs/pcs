@@ -220,7 +220,7 @@ class BookbinderAgent:
                             # times
                             frames_group_data.create_dataset('times', data=obj.times, track_order=True)
                             # names
-                            frames_group_data.create_dataset('names', shape=len(obj.names), dtype=h5py.string_dtype(), \
+                            frames_group_data.create_dataset('names', data=obj.names, dtype=h5py.string_dtype(), \
                                                             track_order=True)
                             # data
                             kwa = {
@@ -394,8 +394,10 @@ class BookbinderAgent:
                                 for name, data in items:
                                     if type(data) == spt3g.core.G3VectorString:
                                         block_dsets[name] = frame_blocks[(i,j)].create_dataset(name,
-                                                                    shape=len(data), dtype=h5py.string_dtype())
-                                        block_dsets[name][:] = data
+                                                                    data=data, dtype=h5py.string_dtype())
+                                        #block_dsets[name] = frame_blocks[(i,j)].create_dataset(name,
+                                        #                            shape=len(data), dtype=h5py.string_dtype())
+                                        #block_dsets[name][:] = data
                                     else:
                                         block_dsets[name] = frame_blocks[(i,j)].create_dataset(name, data=data)
                             elif k == 'providers':

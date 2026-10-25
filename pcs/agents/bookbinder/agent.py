@@ -53,6 +53,8 @@ def read_and_join_g3_frames_from_directory(dirname, return_filenames=False):
     else:
         return frames
 
+# ------------------------------------------------------------------------------------------------------
+
 class BookbinderAgent:
     """
     Class to carry out level0 bookbinding from raw detector and housekeeping (hk) data, producing a single HDF5 book
@@ -124,8 +126,12 @@ class BookbinderAgent:
             #
             #d = threads.deferToThread(self._bind_processing, session)
             #return d
-            status, message = self._bind_processing()
-            print(status, message)
+            bind_status, bind_message = self._bind_processing()
+            print(bind_status, bind_message)
+            verify_status, verify_message = self._verify_book()
+            print(verify_status, verify_message)
+            status = bind_status and verify_status
+            message = bind_message + ' / ' + verify_message
         return status, message
 
     def _bind_processing(self):
@@ -144,6 +150,18 @@ class BookbinderAgent:
         self.bind_log_data(file_mode='a')
         #
         return True, f'Book bound: {self.sess_id}'
+
+    def _verify_book(self):
+        #
+        #if not self.status_for_binding():
+        #    return
+        #
+        print('beginning _verify_book')
+        verifier = Level0_Verifier(self.hk_root, self.det_root, self.det_name, self.det_date, self.sess_id, \
+                                       self.h5_output)
+        verification_status = verifier.verify()
+        #
+        return verification_status, f'Book verified (status={verification_status}): {self.sess_id}'
 
     def stop_process(self, session, params):
         session.set_status('stopping')
@@ -408,6 +426,412 @@ class BookbinderAgent:
                                 for name, data in items:
                                     frame_providers[(i,j)].attrs[name] = data.value
 
+# ------------------------------------------------------------------------------------------------------
+
+class Level0_Verifier:
+    """
+    """
+    def __init__(self, hk_root, det_root, det_name, det_date, sess_id, h5_file):
+        self.hk_root = hk_root
+        self.det_root = det_root
+        self.det_name = det_name
+        self.det_date = det_date
+        self.sess_id = sess_id
+        self.h5_file = h5_file
+        #
+        self.boards_to_include = 'all'
+        self.hk_files = None
+        self.det_dir = os.path.join(det_root, det_name, det_date, sess_id)
+        self.det_time_start = int(sess_id)
+        self.det_time_end = None
+        self.not_matching = {}
+        self.matching = {}
+        #
+
+    def verify(self):
+        verified = True
+        self.verification_log = ''
+        #
+        try:
+            status = self.verify_timestream_data_against_h5()
+            if status != 0:
+                self.verification_log = self.verification_log + 'timestream verification failed' + '\n'
+                self.verification_log = self.verification_log + f'timetream status={status}' + '\n'
+                self.verification_log = self.verification_log + '\n'
+                verified = False
+        except Exception as e:
+            self.verification_log = self.verification_log + 'timestream verification failed' + '\n'
+            self.verification_log = self.verification_log + f'Exception Type: {type(e)}' + '\n'
+            self.verification_log = self.verification_log + f'Exception Message: {e}' + '\n'
+            self.verification_log = self.verification_log + '\n'
+            verified = False
+        #
+        try:
+            status = self.verify_hk_data_against_h5()
+            if status != 0:
+                self.verification_log = self.verification_log + 'hk verification failed' + '\n'
+                self.verification_log = self.verification_log + f'hk status={status}' + '\n'
+                self.verification_log = self.verification_log + '\n'
+                verified = False
+        except Exception as e:
+            self.verification_log = self.verification_log + 'hk verification failed' + '\n'
+            self.verification_log = self.verification_log + f'Exception Type: {type(e)}' + '\n'
+            self.verification_log = self.verification_log + f'Exception Message: {e}' + '\n'
+            self.verification_log = self.verification_log + '\n'
+            verified = False
+        #
+        try:
+            status = self.verify_config_data_against_h5()
+            if status != 0:
+                self.verification_log = self.verification_log + 'config verification failed' + '\n'
+                self.verification_log = self.verification_log + f'config status={status}' + '\n'
+                self.verification_log = self.verification_log + '\n'
+                verified = False
+        except Exception as e:
+            self.verification_log = self.verification_log + 'config verification failed' + '\n'
+            self.verification_log = self.verification_log + f'Exception Type: {type(e)}' + '\n'
+            self.verification_log = self.verification_log + f'Exception Message: {e}' + '\n'
+            self.verification_log = self.verification_log + '\n'
+            verified = False
+        #
+        try:
+            status = self.verify_targ_data_against_h5()
+            if status != 0:
+                self.verification_log = self.verification_log + 'targ verification failed' + '\n'
+                self.verification_log = self.verification_log + f'targ status={status}' + '\n'
+                self.verification_log = self.verification_log + '\n'
+                verified = False
+        except Exception as e:
+            self.verification_log = self.verification_log + 'targ verification failed' + '\n'
+            self.verification_log = self.verification_log + f'Exception Type: {type(e)}' + '\n'
+            self.verification_log = self.verification_log + f'Exception Message: {e}' + '\n'
+            self.verification_log = self.verification_log + '\n'
+            verified = False
+        #
+        try:
+            status = self.verify_vna_data_against_h5()
+            if status != 0:
+                self.verification_log = self.verification_log + 'vna verification failed' + '\n'
+                self.verification_log = self.verification_log + f'vna status={status}' + '\n'
+                self.verification_log = self.verification_log + '\n'
+                verified = False
+        except Exception as e:
+            self.verification_log = self.verification_log + 'vna verification failed' + '\n'
+            self.verification_log = self.verification_log + f'Exception Type: {type(e)}' + '\n'
+            self.verification_log = self.verification_log + f'Exception Message: {e}' + '\n'
+            self.verification_log = self.verification_log + '\n'
+            verified = False
+        #
+        status = (verified) and (len(self.not_matching)==0)
+        if status is True:
+            self.verification_file = f'{self.h5_file}'.replace('.', '_')
+            self.verification_file = self.verification_file + '_passed.txt'
+            with open(self.verification_file, 'w') as f:
+                h5_file_base = os.path.split(self.h5_file)[-1]
+                print(f'{h5_file_base} passed all verification checks', file=f)
+        else:
+            self.verification_file = f'{self.h5_file}'.replace('.', '_')
+            self.verification_file = self.verification_file + '_failed.txt'
+            with open(self.verification_file, 'w') as f:
+                print(self.verification_log, file=f)
+        return status
+
+    def verify_hk_data_against_h5(self):
+        #
+        with h5py.File(self.h5_file, 'r') as h5f:
+            json_hkf = h5f['hk'].attrs['hk_files']
+            source_hk_files = json.loads(json_hkf)
+            self.hk_files = []
+            for f in source_hk_files:
+                p0, p1 = os.path.split(f)
+                hkdir = os.path.split(p0)[-1]
+                hkfile = p1
+                self.hk_files.append(os.path.join(self.hk_root, hkdir, hkfile))
+        #
+        frames = []
+        for hkf in self.hk_files:
+            fr = read_g3_frames_from_file(hkf)
+            frames.extend(fr)
+        if len(frames) == 0:
+            status = 1
+            return status
+        #
+        expected_keys = {('address', str),
+                            ('block_names', spt3g.core.G3VectorString),
+                            ('blocks', spt3g.core.G3VectorFrameObject),
+                            ('description', str),
+                            ('hkagg_type', int),
+                            ('hkagg_version', int),
+                            ('prov_id', int),
+                            ('provider_session_id', str),
+                            ('providers', spt3g.core.G3VectorFrameObject),
+                            ('session_id', int),
+                            ('start_time', float),
+                            ('timestamp', float)}
+        all_frame_keys = set()
+        for i_,f_ in enumerate(frames):
+            for k in f_.keys():
+                all_frame_keys.add((k, type(f_[k])))
+        if all_frame_keys != expected_keys:
+            print('WARNING: detected keys not equal to expected keys')
+        #
+        with h5py.File(self.h5_file, 'r') as h5f:
+            h5f_key = '/hk/frames'
+            for i,frame in enumerate(frames):
+                h5f_key = f'/hk/frames/{i}'
+                frame_type = str(frame.type)
+                if frame_type != h5f[h5f_key].attrs['frame_type']:
+                    self.not_matching[h5f_key] = (frame_type, h5f[h5f_key].attrs['frame_type'])
+                else:
+                    self.matching[h5f_key] = (frame_type, h5f[h5f_key].attrs['frame_type'])
+                #
+                for k in sorted(frame.keys()):
+                    obj = frame[k]
+                    obj_type = type(obj).__name__
+                    if k == 'blocks':
+                        #num_blocks = len(frame['blocks'])
+                        # each block is a spt3g.core.G3TimesampleMap that contains one or more named co-sampled vectors
+                        # with times and data
+                        for bi, b in enumerate(frame['blocks']):
+                            h5f_key = f'/hk/frames/{i}/blocks/{bi}'
+                            times_h5f_key = f'{h5f_key}/times'
+                            if not (h5f[times_h5f_key][:] == b.times[:]).all():
+                                self.not_matching[times_h5f_key] = (h5f[times_h5f_key][:], b.times)
+                            else:
+                                self.matching[times_h5f_key] = (h5f[times_h5f_key][:], b.times)
+                            for name, data in b.items():
+                                data_h5f_key = f'{h5f_key}/{name}'
+                                adata = np.array(data)
+                                # need to treat strings differently in hdf5
+                                if type(data) == spt3g.core.G3VectorString:
+                                    if not (h5f[data_h5f_key].asstr()[:] == data[:]).all():
+                                        self.not_matching[data_h5f_key] = (h5f[data_h5f_key].asstr(), data)
+                                    else:
+                                        self.matching[data_h5f_key] = (h5f[data_h5f_key].asstr(), data)
+                                else:
+                                    if not (h5f[data_h5f_key][:] == data[:]).all():
+                                        self.not_matching[data_h5f_key] = (h5f[data_h5f_key][:], data)
+                                    else:
+                                        self.matching[data_h5f_key] = (h5f[data_h5f_key][:], data)
+                    #
+                    elif k == 'block_names':
+                        num_block_names = len(frame['block_names'])
+                        #print(f'{k}: {obj_type}, {num_block_names} elements', file=output)
+                        #print('num_block_names', num_block_names, sep=',', file=output)
+                        #for j in range(num_block_names):
+                        #    print(f'Group: /hk/frames/{i}/block_names/{j}', file=output)
+                        #    print(f'--- {frame['block_names'][j]}', file=output)
+                    #
+                    elif k == 'providers':
+                        #num_providers = len(frame['providers'])
+                        for pi, p in enumerate(frame['providers']):
+                            h5f_key = f'/hk/frames/{i}/providers/{pi}'
+                            for name, data in p.items():
+                                # providers are stored in attrs for h5 providers/{pi} Group
+                                # after extracting the .value attribute
+                                # need to extract g3 data.value here to do comparison
+                                h5f_val = h5f[h5f_key].attrs[name]
+                                attrs_h5f_key = f'{h5f_key}:attrs/{name}'
+                                if data.value != h5f_val:
+                                    self.not_matching[attrs_h5f_key] = (data.value, h5f_val)
+                                else:
+                                    self.matching[attrs_h5f_key] = (data.value, h5f_val)
+                    #
+                    else:  # should be a scalar value in attrs
+                        #print(f'{k}: {obj_type}, {obj}', file=output)
+                        if k == 'block_names':
+                            continue
+                        h5f_key = f'/hk/frames/{i}'
+                        h5f_val = h5f[h5f_key].attrs[k]
+                        attrs_h5f_key = h5f_key + ':attrs/' + k
+                        if obj != h5f_val:
+                            self.not_matching[attrs_h5f_key] = (obj, h5f_val)
+                        else:
+                            self.matching[attrs_h5f_key] = (obj, h5f_val)
+        status = 0
+        return status
+
+    def verify_timestream_data_against_h5(self):
+        #
+        if self.boards_to_include != 'all':  # list like ['B1', 'B2']
+            bd_dirs = []
+            for board in self.boards_to_include:
+                board_dirs = sorted(glob.glob(os.path.join(self.det_dir, 'timestream', board+'D1')))
+                bd_dirs.extend(board_dirs)
+        else:
+            bd_dirs = sorted(glob.glob(os.path.join(self.det_dir, 'timestream', 'B*D*')))
+        if len(bd_dirs) == 0:
+            status = 1
+            return status
+        #
+        with h5py.File(self.h5_file, 'r') as h5f:
+            #
+            h5f_key = '/timestream'            
+            for bd_dir in bd_dirs:
+                bd = os.path.split(bd_dir)[-1]
+                h5f_key = f'/timestream/{bd}'
+                json_timestream_files = h5f[h5f_key].attrs['det_files']
+                det_files = json.loads(json_timestream_files)
+                num_frames = int(h5f[h5f_key].attrs['num_frames'])
+                frames = read_and_join_g3_frames_from_directory(bd_dir)
+                #
+                for i,frame in enumerate(frames):
+                    h5f_key = f'/timestream/{bd}/frames/{i}'
+                    frame_type = str(frame.type)
+                    #
+                    for k in sorted(frame.keys()):
+                        obj = frame[k]
+                        #obj_type = type(obj)
+                        obj_type = type(obj).__name__
+                        if k == 'packet_counts':
+                            h5f_key = f'/timestream/{bd}/frames/{i}/{k}'
+                            if not (h5f[h5f_key][:] == obj[:]).all():
+                                self.not_matching[h5f_key] = (h5f[h5f_key], obj[:])                        #
+                        elif k == 'data':
+                            h5f_key = f'/timestream/{bd}/frames/{i}/{k}/times'
+                            if not (h5f[h5f_key][:] == obj.times[:]).all():
+                                self.not_matching[h5f_key] = (h5f[h5f_key][:], obj.times[:])
+                            #
+                            h5f_key = f'/timestream/{bd}/frames/{i}/{k}/data'
+                            if not (h5f[h5f_key][:] == obj.data[:]).all():
+                                self.not_matching[h5f_key] = (h5f[h5f_key][:], obj.data[:])
+                            #
+                            h5f_key = f'/timestream/{bd}/frames/{i}/{k}/names'
+                            g3_arr = np.array(obj.names[:], dtype=object)
+                            hdf5_arr = np.char.decode(h5f[h5f_key][:].astype('S'), 'utf-8')
+                            if not (g3_arr == hdf5_arr).all():
+                                self.not_matching[h5f_key] = (h5f[h5f_key][:], obj.names[:])
+                        #
+                        else:  # should be a scalar value in attrs
+                            h5f_key = f'/timestream/{bd}/frames/{i}'
+                            h5f_val = h5f[h5f_key].attrs[k]
+                            if type(obj) == spt3g.core.G3Time:
+                                obj_val = int(obj)
+                            else:
+                                obj_val = obj
+                            attrs_h5f_key = h5f_key + ':attrs/' + k
+                            if obj_val != h5f_val:
+                                self.not_matching[attrs_h5f_key] = (obj, h5f_val)
+                            else:
+                                self.matching[attrs_h5f_key] = (obj, h5f_val)
+        status = 0
+        return status
+
+    def verify_config_data_against_h5(self):
+        #
+        with h5py.File(self.h5_file, 'r') as h5f:
+        #
+            h5f_key = '/config'
+            yaml_files = glob.glob(os.path.join(self.det_dir, 'config', '*.yaml'))
+            for yf in yaml_files:
+                yf_file = os.path.split(yf)[-1]
+                with open(yf, 'r', encoding='utf-8') as f:
+                    yaml_text = f.read()
+                config_yf = np.bytes_(yaml_text)
+                #hdf5_yf = np.char.decode(h5f[h5f_key].attrs[yf_file].astype('S'), 'utf-8')
+                hdf5_yf = h5f[h5f_key].attrs[yf_file]
+                if not (config_yf == hdf5_yf):
+                    #self.not_matching[h5f_key] = (h5f[h5f_key].attrs[yf_file], config_yf)
+                    self.not_matching[h5f_key] = (hdf5_yf, config_yf)
+            #
+            if self.boards_to_include != 'all':  # list like ['B1', 'B2']
+                bd_dirs = []
+                for board in self.boards_to_include:
+                    board_dirs = sorted(glob.glob(os.path.join(self.det_dir, 'config', board+'D*')))
+                    bd_dirs.extend(board_dirs)
+            else:
+                bd_dirs = sorted(glob.glob(os.path.join(self.det_dir, 'config', 'B*D*')))
+            if len(bd_dirs) == 0:
+                status = 1
+                return status
+            #
+            for bd_full in bd_dirs:
+                bd = os.path.split(bd_full)[-1]
+                h5f_key = f'/config/{bd}'
+                yaml_files = glob.glob(os.path.join(self.det_dir, 'config', bd, '*.yaml'))
+                for yf in yaml_files:
+                    yf_file = os.path.split(yf)[-1]
+                    with open(yf, 'r', encoding='utf-8') as f:
+                        yaml_text = f.read()
+                    config_yf = np.bytes_(yaml_text)
+                    hdf5_yf = h5f[h5f_key].attrs[yf_file]
+                    if not (config_yf == hdf5_yf):
+                        self.not_matching[h5f_key] = (hdf5_yf, config_yf)
+                #
+                bd_combs_dir = os.path.join(self.det_dir, 'config', bd, 'combs')
+                h5f_key = f'/config/{bd}/combs'
+                npy_files = glob.glob(os.path.join(bd_combs_dir, '*.npy'))
+                for npyf in npy_files:
+                    npyf_file = os.path.split(npyf)[-1]
+                    data = np.load(npyf)
+                    h5f_key = f'/config/{bd}/combs/{npyf_file}'
+                    if not (h5f[h5f_key][:] == data[:]).all():
+                        self.not_matching[h5f_key] = (h5f[h5f_key][:], data[:])
+                    #
+        status = 0
+        return status
+                    
+    def verify_targ_data_against_h5(self):
+        #
+        with h5py.File(self.h5_file, 'r') as h5f:
+            h5f_key = '/targ'
+            #
+            if self.boards_to_include != 'all':  # list like ['B1', 'B2']
+                bd_dirs = []
+                for board in self.boards_to_include:
+                    board_dirs = sorted(glob.glob(os.path.join(self.det_dir, 'targ', board+'D*')))
+                    bd_dirs.extend(board_dirs)
+            else:
+                bd_dirs = sorted(glob.glob(os.path.join(self.det_dir, 'targ', 'B*D*')))
+            if len(bd_dirs) == 0:
+                status = 1
+                return status
+            for bd_full in bd_dirs:
+                bd = os.path.split(bd_full)[-1]
+                h5f_key = f'/targ/{bd}'
+                npy_files = glob.glob(os.path.join(bd_full, '*.npy'))
+                for npyf in npy_files:
+                    npyf_file = os.path.split(npyf)[-1]
+                    data = np.load(npyf)
+                    h5f_key = f'/targ/{bd}/{npyf_file}'
+                    if not (h5f[h5f_key][:] == data[:]).all():
+                        self.not_matching[h5f_key] = (h5f[h5f_key][:], data[:])
+                    #
+
+        status = 0
+        return status
+
+    def verify_vna_data_against_h5(self):
+        #
+        with h5py.File(self.h5_file, 'r') as h5f:
+            h5f_key = '/vna'
+            #
+            if self.boards_to_include != 'all':  # list like ['B1', 'B2']
+                bd_dirs = []
+                for board in self.boards_to_include:
+                    board_dirs = sorted(glob.glob(os.path.join(self.det_dir, 'vna', board+'D*')))
+                    bd_dirs.extend(board_dirs)
+            else:
+                bd_dirs = sorted(glob.glob(os.path.join(self.det_dir, 'vna', 'B*D*')))
+            if len(bd_dirs) == 0:
+                status = 1
+                return status
+            #
+            for bd_full in bd_dirs:
+                bd = os.path.split(bd_full)[-1]
+                h5f_key = f'/vna/{bd}'
+                npy_files = glob.glob(os.path.join(bd_full, '*.npy'))
+                for npyf in npy_files:
+                    npyf_file = os.path.split(npyf)[-1]
+                    data = np.load(npyf)
+                    h5f_key = f'/vna/{bd}/{npyf_file}'
+                    if not (h5f[h5f_key][:] == data[:]).all():
+                        self.not_matching[h5f_key] = (h5f[h5f_key][:], data[:])
+                    #
+        status = 0
+        return status                    
+                                       
+# ------------------------------------------------------------------------------------------------------
 
 def make_parser(parser=None):
     """Build the argument parser for the Agent."""

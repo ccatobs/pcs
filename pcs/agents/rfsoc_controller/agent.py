@@ -85,7 +85,7 @@ class RFSoController:
         self._new_session(init_boards=True)  # Start new ccatkidlib session
 
         self.last_call = time.time()
-        self.monitor_session, self.session_stale = True, False
+        self.session_monitor, self.session_stale = True, False
         self.session_timeout, self.monitor_interval = session_timeout, monitor_interval
 
         self.prot = None
@@ -121,12 +121,13 @@ class RFSoController:
             )
             self.last_call, self.session_stale = time.time(), False
 
-            RC.NCLOs = self.NCLOs
-            RC.drive_attens = self.drive_attens
-            RC.sense_attens = self.sense_attens
+            # Todo: Need to think about how to best handle NCLO and attenuation state between method calls
+            #RC.NCLOs = self.NCLOs
+            #RC.drive_attens = self.drive_attens
+            #RC.sense_attens = self.sense_attens
 
-            RC.set_NCLO(setup=False)
-            RC.set_atten(setup=False)
+            RC.set_NCLO(NCLO=self.NCLOs.values(), setup=False)
+            RC.set_atten(drive=self.drive_attens.values(), sense=self.sense_attens.values(), setup=False)
 
             params["R"] = RC
             rtn = func(self, session, params)
@@ -363,8 +364,8 @@ class RFSoController:
     @ocs_agent.param("time", type=float, check=lambda x: x > 0)
     @ocs_agent.param("write_comb", type=bool, default=None)
     @ocs_agent.param("tone_freqs", type=list, default=None)
-    @ocs_agent.param("tone_powers", type=list, default=None)
-    @ocs_agent.param("tone_phis", type=list, default=None)
+    @ocs_agent.param("tone_powers", type=(int, float, list), default=None)
+    @ocs_agent.param("tone_phis", type=(int, float, list), default=None)
     def take_timestream(self, session, params):
         with self.lock.acquire_timeout(5, job="timestream") as acquired:
             if not acquired:
@@ -434,8 +435,8 @@ class RFSoController:
     @ocs_agent.param("sweep_steps", type=(int, list), default=None)
     @ocs_agent.param("write_comb", type=bool, default=None)
     @ocs_agent.param("tone_freqs", type=list, default=None)
-    @ocs_agent.param("tone_powers", type=list, default=None)
-    @ocs_agent.param("tone_phis", type=list, default=None)
+    @ocs_agent.param("tone_powers", type=(int, float, list), default=None)
+    @ocs_agent.param("tone_phis", type=(int, float, list), default=None)
     def take_target_sweep(self, session, params):
         """take_target_sweep(com_to=None, write_comb=True, sweep_steps=None, parallel_boards=None, parallel_drones=None)
 
@@ -504,8 +505,8 @@ class RFSoController:
     @ocs_agent.param("sweep_steps", type=(float, list), default=None)
     @ocs_agent.param("write_comb", type=bool, default=None)
     @ocs_agent.param("tone_freqs", type=list, default=None)
-    @ocs_agent.param("tone_powers", type=list, default=None)
-    @ocs_agent.param("tone_phis", type=list, default=None)
+    @ocs_agent.param("tone_powers", type=(int, float, list), default=None)
+    @ocs_agent.param("tone_phis", type=(int, float, list), default=None)
     def tune_tone_placement(self, session, params):
         with self.lock.acquire_timeout(5, job="tune_tone_placement") as acquired:
             if not acquired:
@@ -537,8 +538,8 @@ class RFSoController:
     @ocs_agent.param("sweep_steps", type=(float, list), default=None)
     @ocs_agent.param("write_comb", type=bool, default=None)
     @ocs_agent.param("tone_freqs", type=list, default=None)
-    @ocs_agent.param("tone_powers", type=list, default=None)
-    @ocs_agent.param("tone_phis", type=list, default=None)
+    @ocs_agent.param("tone_powers", type=(int, float, list), default=None)
+    @ocs_agent.param("tone_phis", type=(int, float, list), default=None)
     @ocs_agent.param("stream_time", type=float, default=0, check=lambda x: x >= 0)
     def tune_tone_power(self, session, params):
         """ """
@@ -579,7 +580,7 @@ class RFSoController:
                     f"Could not acquire lock because it is held by {self.lock.job}.",
                 )
 
-            while self.monitor_session:
+            while self.session_monitor:
                 if time.time() - self.last_call >= self.session_timeout:
                     self.session_stale = True  # Mark that the current session has become stale and a new session should be created upon next command call
 
@@ -593,8 +594,8 @@ class RFSoController:
 
     def stop_monitoring(self, session, params):
         """ """
-        if self.monitor_session:
-            self.monitor_session = False
+        if self.session_monitor:
+            self.session_monitor = False
             return True, "Stopping session monitoring..."
         else:
             return False, "Not currently monitoring session."

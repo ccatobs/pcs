@@ -2,6 +2,8 @@ import h5py
 import json
 import numpy as np
 import os
+import tempfile
+import subprocess
 import glob
 import sys
 import so3g
@@ -11,7 +13,7 @@ import argparse
 import time
 import queue
 from ocs import ocs_agent, site_config
-from ocs.ocs_twisted import TimeoutLock
+#from ocs.ocs_twisted import TimeoutLock
 
 def read_g3_frames_from_file(fname, num_frames=None):
     """
@@ -192,7 +194,33 @@ class BookbinderAgent:
         hk_t1_idx = np.searchsorted(hk_starts, t1)      # need this file
         self.hk_files = possible_hk_files[hk_t0_idx : hk_t1_idx]
         print(self.hk_files)
-        
+        # at this point:
+        # (1) make a local tmp directory to rsync the mounted hk_files to
+        # (2) assign a new instance variable: self.local_hk_files with the local filenames
+        # (3) rsync the mounted hk_files to the local tmp directory
+        # (4) rework hk reading code to read from self.local_hk_files
+        dtemp = tempfile.mkdtemp()
+        self.local_hk_root = os.path.join(dtemp, 'hk')
+        self.local_hk_files = [f.replace(self.hk_root, self.local_hk_root) for f in self.hk_files]
+        relative_files_to_sync = [f.replace(self.hk_root, '') for f in self.hk_files]
+        print(relative_files_to_sync)
+        file_list_str = '\n'.join(relative_files_to_sync)
+        try:
+            result = subprocess.run(
+                ['rsync', '-avz', '--files-from=-', self.hk_root, self.local_hk_root],
+                input=file_list_str,
+                text=True,
+                check=True
+            )
+            print('rsync succeeded')
+            print(result.stdout)
+
+        except subprocess.CalledProcessError as e:
+            print(f'rsync failed with exit code {e.returncode}')
+            print(f'Error details:\n{e.stderr}')
+            
+
+
     def bind_timestream_data(self, file_mode, t0=None, t1=None):
         #
         if self.boards_to_include == 'all':  
@@ -354,7 +382,7 @@ class BookbinderAgent:
     def bind_hk_data(self, file_mode, t0=None, t1=None):
         #
         frames = []
-        for hkf in self.hk_files:
+        for hkf in self.local_hk_files:
             fr = read_g3_frames_from_file(hkf)
             frames.extend(fr)
             #
@@ -362,6 +390,7 @@ class BookbinderAgent:
             hk_group = h5f.create_group('/hk', track_order=True)
             num_frames = len(frames)
             hk_group.attrs['hk_files'] = json.dumps(self.hk_files)
+            hk_group.attrs['local_hk_files'] = json.dumps(self.local_hk_files)
             hk_group.attrs['num_frames'] = num_frames
             frames_group = h5f.create_group('/hk/frames', track_order=True)
             #
@@ -546,7 +575,7 @@ class Level0_Verifier:
                 p0, p1 = os.path.split(f)
                 hkdir = os.path.split(p0)[-1]
                 hkfile = p1
-                self.hk_files.append(os.path.join(self.hk_root, hkdir, hkfile))
+                self.hk_files.append(os.path.join(self.local_hk_root, hkdir, hkfile))
         #
         frames = []
         for hkf in self.hk_files:

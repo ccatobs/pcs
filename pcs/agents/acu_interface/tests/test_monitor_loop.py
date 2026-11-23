@@ -79,7 +79,8 @@ class _Log:
 
 class _FakeSession:
     """A monitor session whose ``status`` the test controls. ``monitor`` reassigns
-    ``.data`` itself (agent.py:387), so a plain settable attribute is enough."""
+    ``.data`` itself (``session.data = {'connected': False}``), so a plain settable
+    attribute is enough."""
 
     def __init__(self, status="running"):
         self.status = status
@@ -143,7 +144,7 @@ def test_monitor_get_status_runs_off_reactor(sync_reactor):
 
     def _get_status():
         polls.append(1)
-        return {"Azimuth current position": 1.0}
+        return {"AzimuthCurrentPosition": 1.0}
 
     agent = _make_monitor_agent(_get_status)
     # 'done' from the start: the priming call still runs (executing the GET), then

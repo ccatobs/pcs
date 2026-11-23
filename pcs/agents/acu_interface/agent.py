@@ -32,15 +32,28 @@ import numpy as np
 from fyst_trajectories import get_fyst_site
 from pcs.agents.acu_interface.trajectory import (
     MAX_REFLOOR_DRIFT_SEC,
+    SCAN_DISPATCH_BUFFER_SEC,
+    TCS_NOTHING_TO_ABORT_MESSAGE,
+    TCS_PROGRAM_TRACK_DRAINED,
+    TCS_RELATIVE_TIME_MAX,
     TCS_SPEED_TOL,
+    TCS_START_TOO_SOON_MESSAGE,
     ScanCompletionLatch,
+    az_scan_duration_sec,
+    az_scan_sun_breach,
     build_constant_el_payload,
     build_daisy_payload,
     build_pong_payload,
     build_source_payload,
+    earth_orientation_note,
+    mode_is_preset,
+    mode_is_program_track,
+    parse_az_scan_params,
     refloor_drift_seconds,
     refloor_payload_start_time,
+    tcs_response_reason,
     tcs_response_status,
+    unknown_scan_param_keys,
 )
 
 INIT_DEFAULT_SCAN_PARAMS = {
@@ -76,8 +89,11 @@ MONITOR_STRUCTURE = [
 #: Maximum update time (in s) for "monitor" process data, even with no changes
 MONITOR_MAX_TIME_DELTA = 2.
 
+#: Minimum time (in s) between two "broadcast" reports of datagrams in another record layout
+BROADCAST_LAYOUT_LOG_INTERVAL = 60.
+
 # ---------------------------------------------------------------------------
-# FYST constant_el_scan tunables (completion poll + slew gate).
+# FYST typed-scan and command tunables (dispatch, slew gate, completion, abort).
 # Soft constants, adjust against commissioning experience.
 # ---------------------------------------------------------------------------
 SCAN_COMPLETION_POLL_SEC = 1.0   # cadence of the post-POST completion poll
@@ -85,13 +101,44 @@ SCAN_SETTLE_SEC = 10.0           # time backstop past the computed scan end
                                  # (SO uses a 20 s graceful-stop window; 10 s is
                                  # a lighter backstop since the stack-drained
                                  # signal normally fires first)
-# The drained count (strict 9999) + axis speed tol live in trajectory.py,
-# encapsulated by ScanCompletionLatch (this loop delegates the decision to it).
+#: The Go TCS checks each point as it uploads it, after its HTTP 200, and a refused
+#: point ends the upload; the batches already on the stack still play. A stack
+#: drained more than this before the scheduled end fails the scan as truncated; no
+#: points on the stack this long after the start fails it as never uploaded.
+SCAN_EARLY_DRAIN_TOL_SEC = 30.0
 
-SLEW_ARRIVAL_TOL_DEG = 0.05  # arrival tolerance (SO used 0.01; 0.05 is robust
-                             # against 200 Hz broadcast jitter)
-SLEW_POLL_SEC = 0.2          # matches the prior abort-poll cadence
-SLEW_TIMEOUT_SEC = 180.0     # > worst-case ~133 s 360deg wrap-slew + margin
+#: Consecutive reads of points left with no axis in ProgramTrack that fail a scan
+#: as interrupted; a single read can fall within a mode change.
+TRACK_LEFT_CONFIRM_READS = 2
+
+#: How long (s) the abort path waits for the ACU to leave ProgramTrack after the
+#: move-to that stops a held track. The Go TCS starts a move-to as soon as its loop
+#: takes it, and the ACU changes mode within a tick of its own.
+HELD_TRACK_STOP_WAIT_SEC = 3.0
+HELD_TRACK_STOP_POLL_SEC = 0.5
+
+SLEW_ARRIVAL_TOL_DEG = 0.05  # looser than positionTol (TCS b7bbbf9); the speed test and busy retry cover it
+SLEW_STATUS_POLL_SEC = 1.0   # each poll is a status read through the OCS API
+SLEW_TIMEOUT_SEC = 180.0     # > the Go TCS's own move-to timeout, ~133 s (estimateMoveTime at TCS b7bbbf9)
+#: Largest raw-minus-sky difference (deg) on either axis that the slew gate takes
+#: as the Go TCS's own correction of the move-to target (Sky2Raw at TCS b7bbbf9:
+#: refraction plus the pointing-model offsets), so a commanded position farther
+#: from the target is a stale preset. No modulo: a commanded azimuth one wrap
+#: away is a different encoder position and must not pass.
+POINTING_CORRECTION_MAX_DEG = 0.5
+
+#: The relative ``az_scan`` start_time sent unfloored. On Go TCS ``b5666ae`` and
+#: later (``moveThenStartPattern``, on master ``b7bbbf9``) a 0 starts the pattern
+#: about 10 s after the TCS's own move to the scan's start; earlier builds refuse
+#: it with 400 ("program track starts too soon").
+AZ_SCAN_START_AFTER_MOVE = 0.0
+
+# Retry of a move-to or /path POST refused as busy (tcs_response_status None).
+# The Go TCS runs one command at a time and notices a finished one only at its
+# 1 Hz status tick, so a command sent just after the previous one ends can still
+# find it running. With the 500 ms queue wait, attempts start about 1.25 s apart.
+TCS_BUSY_RETRY_MAX = 5  # attempts, the first included
+TCS_BUSY_RETRY_DELAY_SEC = 0.75
 
 #: The typed scan ops that run as abortable Processes holding azel_lock. The
 #: standalone ``abort`` task stops each so a running scan releases the lock (its
@@ -121,9 +168,8 @@ class ACUAgent:
         self.config = aculib.load_config(config)
         self.acu_conf = self.config['devices'][device]
         #self.platform_type = self.config['devices']['platform']
-        # The 'acu-sim' device block carries no 'platform' key; default it to
-        # 'latp', the only platform populated in INIT_DEFAULT_SCAN_PARAMS and
-        # status_keys.status_fields, so the simulator initializes cleanly.
+        # The 'acu-sim' device block carries no 'platform' key, and 'latp' is the
+        # only platform populated in status_keys.status_fields.
         self.platform_type = self.acu_conf.get('platform', 'latp')
         self.udp = self.acu_conf['streams']['main']
         self.udp_schema = aculib.get_stream_schema(self.udp['schema'])
@@ -241,7 +287,7 @@ class ACUAgent:
                             aborter=self._simple_task_abort)
         agent.register_task('az_scan',
                             self.az_scan,
-                            blocking=False,
+                            blocking=True,
                             aborter=self._simple_task_abort)
         agent.register_task('fromfile_scan',
                             self.fromfile_scan,
@@ -290,6 +336,16 @@ class ACUAgent:
                             record=True,
                             agg_params=basic_agg_params,
                             buffer_time=1)
+
+        # The typed scans and az_scan's Sun check need astropy's Earth-orientation
+        # data. Checked once, here, before the reactor runs (the check can block
+        # while astropy tries a download), so a bad table shows at start, not at
+        # the first scan; the agent starts either way.
+        eop_ok, eop_note = earth_orientation_note(time.time())
+        if eop_ok:
+            self.log.info('{note}', note=eop_note)
+        else:
+            self.log.error('{note}', note=eop_note)
     
     #@inlineCallbacks
     def _simple_task_abort(self, session, params):
@@ -372,7 +428,7 @@ class ACUAgent:
             status = yield threads.deferToThread(self.acu_read.get_status)
             session.data['StatusDetailed'] = status
         except (Exception, SystemExit) as e:
-            self.log.error(f'monitor: initial status read failed: {e}')
+            self.log.error('monitor: initial status read failed: {e}', e=e)
             session.data['connected'] = False
 
         data_blocks = {}
@@ -389,7 +445,7 @@ class ACUAgent:
             except (Exception, SystemExit) as e:
                 if now - last_complaint > 3600:
                     errormsg = {'aculib_error_message': str(e)}
-                    self.log.error(str(e))
+                    self.log.error('{e}', e=e)
                     acu_error = {'timestamp': time.time(),
                                     'block_name': 'ACU_error',
                                     'data': errormsg
@@ -523,12 +579,26 @@ class ACUAgent:
         udp_data = []
         fields = self.udp_schema['fields']
         session.data = {}
+        log = self.log
+        schema = self.udp['schema']
+        layout_logged = float('-inf')
 
         #define the parsing datagram class method
         class MonitorUDP(protocol.DatagramProtocol):
             def datagramReceived(self, data, src_addr):
+                nonlocal layout_logged
                 now = time.time()
                 host, port = src_addr
+                # A datagram that is not whole records is another record layout:
+                # unpacking it at this stride would shift every field.
+                if len(data) % FMT_LEN:
+                    if now - layout_logged >= BROADCAST_LAYOUT_LOG_INTERVAL:
+                        layout_logged = now
+                        log.error('broadcast: dropping {size}-byte datagrams, not a whole number of '
+                                  '{record}-byte records of schema {schema}; the ACU is sending another '
+                                  'record layout, and the schema is chosen by streams.main.schema of the device',
+                                  size=len(data), record=FMT_LEN, schema=schema)
+                    return
                 offset = 0
                 while len(data) - offset >= FMT_LEN:
                     d = struct.unpack(FMT, data[offset:offset+FMT_LEN])
@@ -589,9 +659,15 @@ class ACUAgent:
                 for key in influx_data.keys():
                     influx_means[key] = np.mean(influx_data[key])
                     influx_data[key] = []
+                # InfluxDB refuses a NaN, so a NaN mean stays out of the block; the ACU simulator
+                # (from v0.7.0) sends its commanded position as NaN during a program track. An OCS
+                # feed block keeps the fields of its first message (ocs Block.append raises on
+                # another set), so the block name carries the fields left out.
+                finite = {k: v for k, v in influx_means.items() if np.isfinite(v)}
+                left_out = sorted(set(influx_means) - set(finite))
                 acu_broadcast_influx = {'timestamp': influx_means['Time_bcast_influx'],
-                                        'block_name': 'ACU_bcast_influx',
-                                        'data': influx_means,
+                                        'block_name': '-'.join(['ACU_bcast_influx'] + left_out),
+                                        'data': finite,
                                         }
                 self.agent.publish_to_feed('acu_broadcast_influx', acu_broadcast_influx)
                 sd = {}
@@ -608,7 +684,8 @@ class ACUAgent:
                     self.log.info('Requesting UDP stream enable.')
                     try:
                         tcs_reconfig = self._make_tcs()
-                        tcs_reconfig.session.post(
+                        yield threads.deferToThread(
+                            tcs_reconfig.session.post,
                             f"{self.acu_conf['base_url']}/api/v1/telescope/acu/position-broadcast",
                             json={'destination_host': udp_host,
                                   'destination_port': int(udp_port)},
@@ -631,8 +708,8 @@ class ACUAgent:
         """go_to(az, el)
 
         **Task** - Move the telescope to a particular point (azimuth,
-        elevation) in Preset mode. When motion has ended and the telescope
-        reaches the preset point, it returns to Stop mode and ends.
+        elevation) in Preset mode. The task returns once the Go TCS has queued
+        the move, without waiting for it to start or finish.
 
         Parameters:
             az (float): destination angle for the azimuth axis
@@ -662,15 +739,24 @@ class ACUAgent:
                     verify_cert=certs['verify']
                     )
             self.log.info('Executing telescope movement')
-            msg = tcs.move_to(target_az,target_el)
-            # 503 -> {} in aculib.post() (move_to passes it through); read via
-            # tcs_response_status so a rejection fails gracefully rather than
-            # crashing on {}.status_code.
+            try:
+                msg = tcs.move_to(target_az,target_el)
+            except SystemExit as e:
+                # aculib.post raises SystemExit on a requests error. No /abort:
+                # this task holds azel_lock only for the call.
+                self.log.error('go_to: move-to failed in transport: {e}', e=e)
+                return False, f'go_to: move-to failed in transport ({e}); whether the dish moved is unknown.'
             code = tcs_response_status(msg)
             self.log.info(f"HTTP request executed with response code: {code}")
+            if code is not None and code >= 500:
+                # The OCS API failed, so the move may have reached the TCS.
+                return False, (
+                    f"go_to: move-to failed at the OCS API "
+                    f"({tcs_response_reason(msg)}); whether the dish moved is unknown.")
             if code != 200:
                 return False, (
-                    f"go_to: Go TCS rejected move_to (HTTP {code}); not moved.")
+                    f"go_to: move-to refused "
+                    f"({tcs_response_reason(msg)}); not moved.")
 
         return True, getattr(msg, "text", "")
 
@@ -686,14 +772,28 @@ class ACUAgent:
         Parameters:
             scan_params (dict): Azimuth scan parameters with the following
                 fields in the dictionary:
-            {start_time (float): time in future to begin scan,
-                in format %Y-%m-%dT%H:%M:%SZ
+            {start_time (float or str): time in future to begin scan, as Unix
+                seconds (below TCS_RELATIVE_TIME_MAX, 1e5: seconds from now) or
+                an ISO-8601 UTC string, %Y-%m-%dT%H:%M:%SZ (no offset: UTC);
+                floored to SCAN_DISPATCH_BUFFER_SEC ahead, except a relative 0
+                (AZ_SCAN_START_AFTER_MOVE), sent as is. Go TCS b5666ae and later
+                move the dish to the scan's start first: 0 starts the pattern
+                about 10 s after that move, and any other start must leave the
+                move time plus 5 s, or the scan fails after the TCS has answered.
              turnaround_time (float): time to change scan direction in seconds
              elevation (float): elevation of telescope in deg
              speed (float): speed of scan in degrees/second
              num_scans (int): numbers of cycles of the azimuth scan
              azimuth_range (list): list with 2 floats containing range of azimuth
              }
+
+        Before sending, the whole arc, from now (the TCS first moves to the
+        range start and holds there) to the pattern's end, is checked against
+        the site's Sun exclusion zone; the move to the range start is not
+        checked. A sweep that comes within its radius, or a scan_params without
+        the six keys, with any other key, or whose pattern keys do not read as
+        finite numbers (speed positive, num_scans a whole number of at least 0,
+        turnaround_time at least 0), is refused and not sent.
         """
         with self.azel_lock.acquire_timeout(0, job='az_scan') as acquired:
             if not acquired:
@@ -712,16 +812,75 @@ class ACUAgent:
                     client_key=certs['client_key'],
                     verify_cert=certs['verify']
                     )
+            try:
+                (scan_params, azimuth_range, elevation, speed, num_scans,
+                 turnaround_time) = parse_az_scan_params(params['scan_params'])
+            except ValueError as e:
+                return False, str(e)
+            start_time = scan_params['start_time']
+
+            # Floored to SCAN_DISPATCH_BUFFER_SEC ahead in its own units (see
+            # TCS_RELATIVE_TIME_MAX), except a relative 0 (AZ_SCAN_START_AFTER_MOVE).
+            now = time.time()
+            absolute = start_time >= TCS_RELATIVE_TIME_MAX
+            if start_time == AZ_SCAN_START_AFTER_MOVE:
+                # A 0 starts 10 s after the TCS's move, which it times out at its own
+                # estimate, at most ~133 s (estimateMoveTime at TCS b7bbbf9); SLEW_TIMEOUT_SEC
+                # covers both.
+                start_unix = now + SLEW_TIMEOUT_SEC
+            elif absolute:
+                start_unix = max(start_time, now + SCAN_DISPATCH_BUFFER_SEC)
+            else:
+                scan_params['start_time'] = max(start_time, SCAN_DISPATCH_BUFFER_SEC)
+                start_unix = now + scan_params['start_time']
+            breach = az_scan_sun_breach(
+                azimuth_range=azimuth_range,
+                elevation=elevation,
+                start_unix=start_unix,
+                duration_sec=az_scan_duration_sec(
+                    azimuth_range, speed, num_scans, turnaround_time),
+                now_unix=now,
+                site=get_fyst_site(),
+            )
+            if breach is not None:
+                lo, hi = azimuth_range
+                refusal = (
+                    f"az_scan: the sweep from az {lo:g} to {hi:g} at el {elevation:g} comes "
+                    f"within {breach['separation']:.1f} deg of the Sun at {breach['time']} "
+                    f"(exclusion radius {breach['radius']:.1f} deg); not launched.")
+                self.log.warn('{refusal}', refusal=refusal)
+                return False, refusal
+            if absolute:
+                # Floored last: the Go TCS times the lead from its receipt.
+                scan_params['start_time'] = max(start_time, time.time() + SCAN_DISPATCH_BUFFER_SEC)
+            if scan_params['start_time'] != start_time:
+                self.log.info('az_scan: floored start_time {start} -> {floored} for the Go TCS '
+                              'minimum lead', start=start_time, floored=scan_params['start_time'])
+
             self.log.info('Executing telescope movement')
-            msg = tcs.azimuth_scan(**params['scan_params'])
-            # 503 -> {} in aculib.post(); read via tcs_response_status so a
-            # rejection fails gracefully rather than crashing on {}.status_code.
+            try:
+                msg = tcs.azimuth_scan(**scan_params)
+            except SystemExit as e:
+                # As in go_to.
+                self.log.error('az_scan: azimuth-scan failed in transport: {e}', e=e)
+                return False, (f'az_scan: azimuth-scan failed in transport ({e}); whether it '
+                               f'launched is unknown.')
             code = tcs_response_status(msg)
             self.log.info(f"HTTP request executed with response code: {code}")
-            if code != 200:
+            if code is not None and code >= 500:
+                # As in go_to; the scan may have reached the TCS.
                 return False, (
-                    f"az_scan: Go TCS rejected azimuth-scan (HTTP {code}); "
-                    "not launched.")
+                    f"az_scan: azimuth-scan failed at the OCS API "
+                    f"({tcs_response_reason(msg)}); whether it launched is unknown.")
+            if code != 200:
+                hint = ''
+                if (scan_params.get('start_time') == AZ_SCAN_START_AFTER_MOVE
+                        and TCS_START_TOO_SOON_MESSAGE in tcs_response_reason(msg)):
+                    hint = (' A start_time of 0 needs Go TCS b5666ae or later; '
+                            'give a start time instead.')
+                return False, (
+                    f"az_scan: azimuth-scan refused "
+                    f"({tcs_response_reason(msg)}); not launched.{hint}")
 
         return True, getattr(msg, "text", "")
 
@@ -735,8 +894,10 @@ class ACUAgent:
             scan points in only 'Horizon' coordinate system is implemented.
 
         Parameters:
-            scan_filename (str): path of the file containing pair of az,el
-                points in each line that the scan patter will go through.
+            scan_filename (str): path of the text file holding the scan's
+                points, one per line as five whitespace-separated numbers
+                [t, az, el, vaz, vel]: seconds after the scan start, azimuth
+                and elevation (deg) and their velocities (deg/s).
         """
         with self.azel_lock.acquire_timeout(0, job='fromfile_scan') as acquired:
             if not acquired:
@@ -756,16 +917,24 @@ class ACUAgent:
                     verify_cert=certs['verify']
                     )
             self.log.info('Executing telescope movement')
-            msg = tcs.scan_pattern_from_file(params['scan_filename'])
-            # scan_pattern_from_file now returns the /path response (or {} on a
-            # 503); read via tcs_response_status so a rejection fails gracefully
-            # rather than crashing on {}/None .status_code.
+            try:
+                msg = tcs.scan_pattern_from_file(params['scan_filename'])
+            except SystemExit as e:
+                # As in go_to; an unreadable scan file still raises.
+                self.log.error('fromfile_scan: /path POST failed in transport: {e}', e=e)
+                return False, (f'fromfile_scan: /path POST failed in transport ({e}); whether it '
+                               f'launched is unknown.')
             code = tcs_response_status(msg)
             self.log.info(f"HTTP request executed with response code: {code}")
+            if code is not None and code >= 500:
+                # As in go_to; the path may have reached the TCS.
+                return False, (
+                    f"fromfile_scan: /path POST failed at the OCS API "
+                    f"({tcs_response_reason(msg)}); whether it launched is unknown.")
             if code != 200:
                 return False, (
-                    f"fromfile_scan: Go TCS rejected /path (HTTP {code}); "
-                    "scan not launched.")
+                    f"fromfile_scan: /path POST refused "
+                    f"({tcs_response_reason(msg)}); scan not launched.")
 
         return True, getattr(msg, "text", "")
 
@@ -784,7 +953,7 @@ class ACUAgent:
         defaults), so the cert-less device blocks resolve to ``verify_cert=False``
         with empty cert paths instead of ``KeyError``-ing like the legacy builds.
         Empty cert paths route ``start_session`` down its cert-less branch
-        (``aculib.py:103-107``, ``session.verify = False``), correct for the
+        (``session.verify = False``), correct for the
         plain-HTTP / loopback-self-signed devices.
         """
         certs = self.acu_conf.get('certs', {})
@@ -797,38 +966,238 @@ class ACUAgent:
             verify_cert=certs.get('verify', False),
         )
 
+    @staticmethod
+    def _publish_phase(session, data, phase, **fields):
+        """Record a typed scan's dispatch phase in ``session.data``.
+
+        ``data`` is the scan's own dict, kept across calls, so ``session.data``, a
+        copy of it, carries every field set so far.
+        """
+        data.update(fields)
+        data['phase'] = phase
+        data['timestamp'] = time.time()
+        session.data = dict(data)
+
+    @staticmethod
+    def _abort_outcome(sent, note):
+        """Say how a failure path's /abort went, for the task's failure text."""
+        detail = f' ({note})' if note else ''
+        if sent:
+            return f'/abort sent{detail}'
+        return f'/abort failed{detail}; the dish may still be moving'
+
+    @staticmethod
+    def _launch_abort_outcome(sent, note):
+        """Say how the /abort after a command the Go TCS may have queued went."""
+        if sent:
+            return '; scan not launched' + (f' ({note})' if note else '')
+        return f', but {note}; the dish may still be moving'
+
+    @staticmethod
+    def _stop_outcome(job, sent, note, where=''):
+        """Return a typed scan's result when it stopped on request, from its /abort.
+
+        ``where`` says when the stop came, in both texts.
+        """
+        if not sent:
+            return False, (f'{job}: stop requested{where}, but /abort failed ({note}); the '
+                           f'dish may still be moving.')
+        detail = f' ({note})' if note else ''
+        return True, f'{job} aborted{where}; /abort sent{detail}.'
+
+    @staticmethod
+    def _program_track_state(status):
+        """Read one ACU status for a program track the dish is still playing.
+
+        Returns ``(points, playing)``: the points on the stack beyond the one a
+        drained stack keeps, and whether an axis is in ProgramTrack, each ``None``
+        when the read lacks it. A track plays when ``points`` is positive and
+        ``playing`` is not ``False``: the Go TCS's ``/abort`` only sets Stop
+        (``Telescope.Stop`` at TCS ``b7bbbf9``), so points in Stop or Preset are
+        a stopped track's leftovers.
+        """
+        free = status.get('QtyOfFreeProgramTrackStackPositions')
+        points = None if free is None else max(0, TCS_PROGRAM_TRACK_DRAINED - int(free))
+        az_mode = status.get('AzimuthMode')
+        el_mode = status.get('ElevationMode')
+        if az_mode is None and el_mode is None:
+            playing = None
+        else:
+            playing = (mode_is_program_track(az_mode)
+                       or mode_is_program_track(el_mode))
+        return points, playing
+
+    def _wait_for_track_to_stop(self, tcs):
+        """Poll the ACU for up to ``HELD_TRACK_STOP_WAIT_SEC`` for its axes to leave ProgramTrack.
+
+        Returns ``True`` once they have, ``False`` if the track still plays at the
+        end, and ``None`` (unconfirmed) if no read carried the modes. Runs
+        off-reactor, inside :meth:`_safe_abort`, so it sleeps between reads.
+        """
+        deadline = time.time() + HELD_TRACK_STOP_WAIT_SEC
+        seen = None
+        while True:
+            try:
+                _points, playing = self._program_track_state(tcs.get_status())
+            except (Exception, SystemExit) as e:
+                self.log.warn('/abort: status read while waiting for the track to stop failed: {e}', e=e)
+            else:
+                if playing is False:
+                    return True
+                if playing is not None:
+                    seen = False
+            if time.time() >= deadline:
+                return seen
+            time.sleep(HELD_TRACK_STOP_POLL_SEC)
+
+    def _stop_held_track(self, tcs, status, points, message):
+        """Stop a program track the Go TCS has let go of: a move-to to where the dish is.
+
+        The Go TCS ends a command without a Stop on a failed ACU status read or a
+        refused upload batch (its command loop in main.go at TCS ``b7bbbf9``), so the
+        ACU plays on while ``/abort`` answers "nothing to abort". ``MoveTo`` sets Stop
+        first, on a stack of any age; ``/reset`` (TCS ``1e3497f``) stops it too and resets
+        ACU failures, where the OCS API relays that route (from OCS ``0c58dec``). A 200
+        means queued only (the Go TCS drops a command while ``Telescope.Ready`` fails), so
+        ``sent`` is ``True`` only once the axes have left ProgramTrack. Returns
+        ``(sent, note)`` as :meth:`_safe_abort`.
+        """
+        held = f'{message}; ACU still playing a program track ({points} points on its stack)'
+        try:
+            az = float(status.get('AzimuthCurrentPosition'))
+            el = float(status.get('ElevationCurrentPosition'))
+        except (TypeError, ValueError):
+            return False, f'{held}, and its position is not in the status, so it was not stopped'
+        target = f'the encoder position read (az={az:.3f}, el={el:.3f})'
+        answer = None  # None: the move-to was accepted; else what became of it
+        accepted = False  # a move-to was accepted on some attempt
+        busy = False
+        stopped = None
+        for attempt in (1, 2):
+            try:
+                reply = tcs.move_to(az, el)
+            except (Exception, SystemExit) as e:
+                answer = f'the move-to to stop it failed in transport ({e})'
+            else:
+                code = tcs_response_status(reply)
+                busy = code is None
+                if code == 200:
+                    answer = None
+                    accepted = True
+                elif code is None:
+                    answer = 'the move-to to stop it met a busy Go TCS'
+                elif code >= 500:
+                    # An OCS API or intermediary failure: the move-to may have been taken.
+                    answer = f'the move-to to stop it got no Go TCS answer ({tcs_response_reason(reply)})'
+                else:
+                    answer = f'the move-to to stop it was refused ({tcs_response_reason(reply)})'
+            stopped = self._wait_for_track_to_stop(tcs)
+            if stopped:
+                # Unless the move-to was accepted, which command stopped the track is unknown.
+                how = (f'via a move-to at {target}' if answer is None
+                       else f'after {answer} (by that move-to if it was taken, or by a '
+                            f'concurrent command)')
+                self.log.warn('/abort: held program track stopped {how}', how=how)
+                return True, f'{message}; held program track ({points} points) stopped {how}'
+            if attempt == 1 and (answer is None or busy):
+                continue  # once more: a move-to the Go TCS dropped, or one refused as busy
+            break
+        if stopped is None:
+            what = answer
+            if answer is None:
+                what = f'a move-to at {target} was sent'
+            elif accepted:
+                what = f'a move-to at {target} was accepted, then {answer}'
+            note = (f'{held}; {what} but no later status read showed the axis modes, so the '
+                    f'stop is unconfirmed')
+        elif answer is None:
+            note = f'{held}; the move-to at {target} was accepted but the ACU still plays the track'
+        else:
+            note = f'{held}; {answer}'
+        self.log.warn('/abort: {note}', note=note)
+        return False, note
+
     def _safe_abort(self, tcs):
-        """Send a Go TCS ``/abort``, swallowing transport failures.
+        """Send a Go TCS ``/abort`` and stop a program track it finds still playing.
 
-        ``aculib...abort()`` calls ``post()``, which raises ``SystemExit`` on a
-        ``requests.RequestException`` and also does ``json.loads(r.content)``;
-        either would otherwise escape the abort path and tear down the Process
-        mid-cleanup. Trap ``(Exception, SystemExit)`` (NOT ``BaseException``, so
-        KeyboardInterrupt/GeneratorExit keep propagating), mirroring the
-        ``_current_encoder_azel`` / completion status-read traps, so an abort
-        always returns cleanly.
-
-        The single shared abort path: every typed scan's in-Process stop handler
-        AND the standalone ``abort`` task (:meth:`abort`) route through here, so
-        they agree on the transport-failure trapping. Returns ``True`` if
-        ``/abort`` was sent without raising, ``False`` if a transport failure was
-        swallowed. The standalone task surfaces that; the in-Process handlers
-        ignore it (already tearing down).
+        Never raises: ``aculib``'s ``abort()`` raises ``SystemExit`` on a transport
+        error (from ``post()``), ``RuntimeError`` on an HTTP 503 and ``ValueError`` on
+        a body that is not JSON, so ``(Exception, SystemExit)`` is trapped, not
+        ``BaseException``. A ``"status": "error"`` answer is a refusal (the OCS API
+        relays it with HTTP 200), except :data:`TCS_NOTHING_TO_ABORT_MESSAGE`: no
+        command was running, but a held track may still play, so a status read checks
+        (:meth:`_stop_held_track`). Every typed scan's stop path and the ``abort`` task
+        use this. Returns ``(sent, note)``: ``sent`` only if the TCS took the
+        ``/abort``, or had nothing to abort and no track plays; ``note`` says why
+        (empty on a plain success).
         """
         try:
-            tcs.abort()
-            return True
+            reply = tcs.abort()
         except (Exception, SystemExit) as e:
-            self.log.warn(f'/abort failed (continuing cleanup): {e}')
-            return False
+            self.log.warn('/abort failed (continuing cleanup): {e}', e=e)
+            note = 'no answer from the TCS (the abort may have taken effect); see log'
+            try:
+                points, playing = self._program_track_state(tcs.get_status())
+            except (Exception, SystemExit):
+                return False, note
+            if playing is False:
+                note += '; the ACU reports both axes out of program track'
+            elif points:
+                note += f'; the ACU still reports a program track ({points} points)'
+            elif playing and points is None:
+                note += '; the ACU reports program track and its stack count is missing'
+            elif playing:
+                note += '; the ACU is in program track with no points left'
+            return False, note
+        raw = reply
+        reply = reply if isinstance(reply, dict) else {}
+        message = str(reply.get('message') or '')
+        if reply.get('status') == 'error' and message != TCS_NOTHING_TO_ABORT_MESSAGE:
+            self.log.warn('/abort refused by the Go TCS: {message}', message=message)
+            return False, f'refused: {message}'
+        if message == TCS_NOTHING_TO_ABORT_MESSAGE:
+            status = None
+            for _ in range(2):  # one retry: a flaky ACU read is the state a held track arises in
+                try:
+                    status = tcs.get_status()
+                    break
+                except (Exception, SystemExit) as e:
+                    self.log.warn('/abort: status read after "nothing to abort" failed: {e}', e=e)
+            if status is None:
+                return False, (f'{message}; the ACU status could not be read, so whether a program '
+                               f'track still plays is unknown')
+            try:
+                points, playing = self._program_track_state(status)
+            except (AttributeError, TypeError, ValueError):
+                return False, (f'{message}; the ACU status is malformed, so whether a program '
+                               f'track still plays is unknown')
+            if points is None and playing is None:
+                return False, (f'{message}; the ACU status carries neither the stack count nor '
+                               f'the axis modes, so whether a program track still plays is '
+                               f'unknown')
+            if points is None and playing:
+                return False, (f'{message}; the ACU status is missing its stack count, so whether '
+                               f'a program track still plays is unknown')
+            if points and playing is not False:
+                self.log.warn('/abort: Go TCS had no command, but the ACU is still playing '
+                              f'a program track ({points} points on its stack)')
+                return self._stop_held_track(tcs, status, points, message)
+            if points:
+                return True, (f'{message}; axes not in program track, {points} stale '
+                              f'points on the stack')
+            return True, message
+        if reply.get('status') != 'ok':
+            self.log.warn('/abort: unexpected reply from the TCS: {reply}', reply=repr(raw))
+            return False, f'unexpected reply: {raw!r}'
+        return True, message
 
     def _current_encoder_azel(self, tcs):
         """Return the current encoder ``(az, el, source)`` in degrees, or ``None``.
 
         Prefers the 200 Hz position broadcast (``self.data['broadcast']``, keys
         ``'Azimuth'`` / ``'Elevation'``). If the stream is not warm yet, falls back
-        to a one-shot ``tcs.get_status()`` on the per-scan client (raw ACU keys
-        ``'Azimuth current position'`` / ``'Elevation current position'``). Returns
+        to a one-shot ``tcs.get_status()`` on the per-scan client (the status field
+        names ``'AzimuthCurrentPosition'`` / ``'ElevationCurrentPosition'``). Returns
         ``None`` when neither source can supply a live position, so the caller
         refuses to dispatch rather than guess (a wrong guess feeds
         ``choose_encoder_solution`` and can produce a wrong-wrap slew).
@@ -843,10 +1212,9 @@ class ACUAgent:
         if 'Azimuth' in bcast and 'Elevation' in bcast:
             return float(bcast['Azimuth']), float(bcast['Elevation']), 'broadcast'
         # Broadcast not warm; one-shot status read. tcs.get_status() calls
-        # sys.exit(-1) on ConnectionError (aculib.py:150-155) -> SystemExit, and
-        # cold start is exactly when that is most likely; trap (Exception,
-        # SystemExit) but NOT BaseException (KeyboardInterrupt/GeneratorExit
-        # keep propagating).
+        # sys.exit(-1) on ConnectionError -> SystemExit, and cold start is exactly
+        # when that is most likely; trap (Exception, SystemExit) but NOT
+        # BaseException (KeyboardInterrupt/GeneratorExit keep propagating).
         try:
             status = tcs.get_status()
             az = status.get('AzimuthCurrentPosition')
@@ -854,7 +1222,7 @@ class ACUAgent:
             if az is not None and el is not None:
                 return float(az), float(el), 'status'
         except (Exception, SystemExit) as e:
-            self.log.warn(f'_current_encoder_azel: get_status() fallback failed: {e}')
+            self.log.warn('_current_encoder_azel: get_status() fallback failed: {e}', e=e)
         # Neither source live: return None so the caller refuses to dispatch
         # rather than guess (see docstring; a guess can feed a wrong-wrap slew).
         self.log.warn('no live position available; '
@@ -864,18 +1232,48 @@ class ACUAgent:
     def _axes_stopped(self, status):
         """Return ``True`` iff both axis velocities in ``status`` are stopped.
 
-        Reads ``'Azimuth current velocity'`` / ``'Elevation current velocity'``
-        from a raw ACU ``/acu/status`` dict; ``True`` only when both are present
-        and below :data:`TCS_SPEED_TOL` (``commands.go:15``). A missing velocity
+        Reads ``'AzimuthCurrentVelocity'`` / ``'ElevationCurrentVelocity'``
+        from a ``get_status()`` dict; ``True`` only when both are present
+        and below :data:`TCS_SPEED_TOL` (``speedTol`` at TCS ``b7bbbf9``). A missing velocity
         returns ``False`` ("not known to be stopped"), so the slew-arrival gate
-        keeps waiting rather than POSTing into a still-settling mount. Needed
-        because the 200 Hz broadcast carries no velocity, so the velocity half of
-        the Go TCS arrival condition can only come from a status read.
+        keeps waiting rather than POSTing into a still-settling mount.
         """
         vaz = status.get('AzimuthCurrentVelocity')
         vel = status.get('ElevationCurrentVelocity')
         return (vaz is not None and abs(vaz) < TCS_SPEED_TOL
                 and vel is not None and abs(vel) < TCS_SPEED_TOL)
+
+    def _preset_arrived(self, status, enc_az, enc_el):
+        """Return ``(arrived, reason)``: whether a ``get_status()`` dict shows the
+        move-to to ``(enc_az, enc_el)`` done, and if not, the first unmet condition.
+
+        The test of ``moveToCmd.isDone`` (TCS ``b7bbbf9``), read from the same
+        raw-frame record: both axes in Preset, each on its commanded position
+        (within :data:`SLEW_ARRIVAL_TOL_DEG`) and stopped (:meth:`_axes_stopped`).
+        It adds that the commanded position lies within
+        :data:`POINTING_CORRECTION_MAX_DEG` of the sky target, so a preset left
+        from an earlier move, or one wrap away, does not pass. A missing field is
+        an unmet condition.
+        """
+        for axis in ('Azimuth', 'Elevation'):
+            mode = status.get(f'{axis}Mode')
+            if not mode_is_preset(mode):
+                return False, f'{axis.lower()} mode is {mode!r}, not Preset'
+        for axis, target in (('Azimuth', enc_az), ('Elevation', enc_el)):
+            current = status.get(f'{axis}CurrentPosition')
+            commanded = status.get(f'{axis}CommandedPosition')
+            if current is None or commanded is None:
+                return False, f'{axis.lower()} current or commanded position missing'
+            if abs(commanded - target) > POINTING_CORRECTION_MAX_DEG:
+                return False, (f'{axis.lower()} commanded {commanded:.4f} is not the '
+                               f'target {target:.4f} (stale preset, or a pointing '
+                               f'correction over {POINTING_CORRECTION_MAX_DEG} deg)')
+            if abs(current - commanded) > SLEW_ARRIVAL_TOL_DEG:
+                return False, (f'{axis.lower()} current {current:.4f} is not on its '
+                               f'commanded {commanded:.4f}')
+        if not self._axes_stopped(status):
+            return False, 'axes not stopped'
+        return True, 'arrived'
 
     @ocs_agent.param('scan_params', type=dict)
     @ocs_agent.param('scheduled_t0_unix', type=float, default=None)
@@ -892,18 +1290,51 @@ class ACUAgent:
         so it can be aborted mid-scan (aborter -> session ``'stopping'`` -> Go TCS
         ``/abort``).
 
+        Progress is in ``session.data``: ``scan``, ``scheduled_t0_unix``,
+        ``ignored_keys`` (``scan_params`` keys the build does not read, or that
+        the chosen form does not use),
+        ``module`` (the key as sent, None without it), the
+        ``timestamp`` of the last change, and ``phase``: ``building``; ``slewing``
+        (adds ``encoder_az``, ``encoder_el``, ``start_time``, ``n_points``);
+        ``holding`` (``/path`` accepted, ``start_time`` re-floored; the dish waits
+        at the scan start until then, the readout-tuning window that
+        ``scheduled_t0_unix`` sets); ``scanning``. A failure leaves the last phase.
+
         Parameters:
-            scan_params (dict): Constant-elevation scan specification, modeled
-                on ``fyst_trajectories.plan_constant_el_scan``. Required keys:
-                ``ra_center``, ``dec_center``, ``width``, ``height`` (deg),
-                ``elevation`` (deg), ``velocity`` (azimuth-coordinate deg/s,
-                mount frame, sent to the ACU as-is, NOT cos(el)-scaled).
-                Optional: ``rising`` (bool), ``angle``, ``az_accel``,
-                ``timestep``, ``az_padding``, ``max_search_hours``,
-                ``step_seconds``, ``lsa_window``.
+            scan_params (dict): Constant-elevation scan specification in one
+                of two forms. Both require ``elevation`` (deg) and ``velocity``
+                (azimuth-coordinate deg/s, mount frame, sent to the ACU as-is,
+                NOT cos(el)-scaled) and take ``az_accel`` and ``timestep``.
+                Field form (no ``az_min`` / ``az_max``), modeled on
+                ``fyst_trajectories.plan_constant_el_scan``: required
+                ``ra_center``, ``dec_center``, ``width``, ``height`` (deg);
+                optional ``rising`` (bool), ``angle``, ``az_padding`` (default
+                0.0), ``max_search_hours``, ``step_seconds``, ``lsa_window``
+                (``rising`` is then ignored); ``duration`` has no effect here.
+                Either, when given, is named in ``ignored_keys``.
+                Window form (``az_min`` and ``az_max`` together; one alone is
+                refused), modeled on the window form of
+                ``fyst_trajectories.plan_constant_el_scan``: the dish
+                sweeps ``az_min`` to ``az_max`` (deg) for ``duration``
+                (required, seconds, at least one leg) from the start; optional
+                ``az_padding``
+                (default 0.0) and the four field keys, all or none.
+                ``lsa_window`` is refused here, and ``rising``, ``angle``,
+                ``max_search_hours`` and ``step_seconds`` are not used (named in
+                ``ignored_keys`` when given).
+                Both forms take ``module``: a Prime-Cam bay name such as
+                'IM5', or several (a list or one comma-separated string) for
+                their mean position, at which the scan is planned; the
+                geometry keys stay as given and the dish is commanded to the
+                boresight that puts that position on them. ``footprint`` is
+                refused.
             scheduled_t0_unix (float): Scheduled scan start in Unix seconds, or
-                None to start as soon as the dispatch buffer allows. The
-                effective start is ``max(scheduled_t0_unix, now + 10 s)``.
+                None to start as soon as the dispatch buffer allows. In the
+                field form the planner searches forward from
+                ``max(scheduled_t0_unix, now + 10 s)`` for the elevation
+                crossing, or with ``lsa_window`` for the window's start; the
+                window form posts that floored time as its start, moved later
+                only by the post-slew re-floor.
         """
         result = yield self._dispatch_scan_process(
             session, params, build_fn=build_constant_el_payload,
@@ -917,7 +1348,7 @@ class ACUAgent:
         One implementation for ``constant_el_scan`` / ``source_scan`` /
         ``pong_scan`` / ``daisy_scan`` instead of four copies: dispatch-buffer
         floor, position-unknown refusal, off-reactor trajectory build, sun-safe
-        slew, slew-arrival gate, post-slew re-floor, 503-safe POST, completion-
+        slew, slew-arrival gate, post-slew re-floor, busy-retried POST, completion-
         latch / abort loop.
 
         ``params`` must carry ``scan_params`` (dict) and ``scheduled_t0_unix``
@@ -927,6 +1358,8 @@ class ACUAgent:
         "payload"}``. ``job`` is the lock job name / log prefix. ``tcs`` is a fresh
         per-scan client (see :meth:`_make_tcs`), not shared with the monitor or the
         abort task, so its ``requests.Session`` cannot be hit concurrently.
+
+        Progress goes to ``session.data`` as :meth:`constant_el_scan` documents.
         """
         with self.azel_lock.acquire_timeout(0, job=job) as acquired:
             if not acquired:
@@ -950,6 +1383,16 @@ class ACUAgent:
             site = get_fyst_site()
             scan_params = dict(params['scan_params'])
             max_dispatch_delay_sec = scan_params.pop('max_dispatch_delay_sec', None)
+            # Unread keys are named, not refused (see trajectory.SCAN_PARAM_KEYS).
+            ignored_keys = unknown_scan_param_keys(job, scan_params)
+            if ignored_keys:
+                self.log.warn(
+                    '{job}: ignoring scan_params keys the build does not read: '
+                    '{ignored_keys}; the scan is built without them',
+                    job=job, ignored_keys=ignored_keys)
+            phase_data = {'scan': job, 'scheduled_t0_unix': params.get('scheduled_t0_unix'),
+                          'ignored_keys': ignored_keys, 'module': scan_params.get('module')}
+            self._publish_phase(session, phase_data, 'building')
             build_kwargs = dict(
                 scan_params=scan_params,
                 current_az=current_az,
@@ -963,7 +1406,7 @@ class ACUAgent:
             try:
                 result = yield threads.deferToThread(build_fn, **build_kwargs)
             except Exception as e:
-                self.log.error(f'{job}: trajectory build failed: {e}')
+                self.log.error('{job}: trajectory build failed: {e}', job=job, e=e)
                 return False, f'Trajectory build failed: {e}'
 
             enc_az = result['encoder_az']
@@ -981,135 +1424,262 @@ class ACUAgent:
             # Slew to the sun-safe start (fresh-per-scan client; see _make_tcs),
             # then gate + POST the scan.
             self.log.info(f'{job}: slewing to sun-safe scan start')
-            slew_msg = yield threads.deferToThread(tcs.move_to, enc_az, enc_el)
-            # 503 -> {} in aculib.post(); read via tcs_response_status so a
-            # rejection fails gracefully rather than crashing on {}.status_code.
-            slew_code = tcs_response_status(slew_msg)
-            self.log.info(f'{job}: move_to response code {slew_code}')
-            if slew_code != 200:
+            slew_msg = None
+            for attempt in range(1, TCS_BUSY_RETRY_MAX + 1):
+                if session.status == 'stopping':
+                    return True, 'Aborted before slew.'
+                try:
+                    slew_msg = yield threads.deferToThread(tcs.move_to, enc_az, enc_el)
+                except (Exception, SystemExit) as e:
+                    # aculib.post raises SystemExit on a requests error. A read
+                    # timeout (TCS_HTTP_TIMEOUT) can come after the Go TCS took the
+                    # move, so /abort before releasing azel_lock.
+                    self.log.error('{job}: slew move-to failed in transport: {e}', job=job, e=e)
+                    sent, note = yield threads.deferToThread(self._safe_abort, tcs)
+                    outcome = self._launch_abort_outcome(sent, note)
+                    return False, (
+                        f'{job}: slew move-to failed in transport ({e}); the Go TCS '
+                        f'may have queued the move, so /abort was sent{outcome}; '
+                        f'redispatch.')
+                slew_code = tcs_response_status(slew_msg)
+                self.log.info(f'{job}: move_to response code {slew_code}')
+                if slew_code == 200:
+                    break
+                if slew_code is None:
+                    if attempt < TCS_BUSY_RETRY_MAX:
+                        yield dsleep(TCS_BUSY_RETRY_DELAY_SEC)
+                    continue
+                if slew_code >= 500:
+                    # The OCS API failed, so the move may have reached the TCS.
+                    self.log.error('{job}: slew move-to failed at the OCS API: {reason}',
+                                   job=job, reason=tcs_response_reason(slew_msg))
+                    sent, note = yield threads.deferToThread(self._safe_abort, tcs)
+                    outcome = self._launch_abort_outcome(sent, note)
+                    return False, (
+                        f'{job}: slew move-to failed at the OCS API '
+                        f'({tcs_response_reason(slew_msg)}); the Go TCS may have '
+                        f'queued the move, so /abort was sent{outcome}; redispatch.')
                 return False, (
-                    f'{job}: Go TCS rejected move_to to scan start '
-                    f'(HTTP {slew_code}); scan not launched.')
+                    f'{job}: move-to to scan start refused '
+                    f'({tcs_response_reason(slew_msg)}); scan not launched.')
+            else:
+                # Every attempt was refused as busy.
+                return False, (
+                    f'{job}: Go TCS stayed busy for {TCS_BUSY_RETRY_MAX} move-to '
+                    f'attempts ({tcs_response_reason(slew_msg)}); scan not launched.')
+            self._publish_phase(
+                session, phase_data, 'slewing', encoder_az=enc_az, encoder_el=enc_el,
+                start_time=payload['start_time'], n_points=len(payload['points']))
 
-            # Gate the /path POST on the slew physically completing. move_to is
-            # fire-and-forget and Go TCS runs one command to completion before
-            # dequeuing the next, so POSTing /path while the Preset move runs
-            # returns HTTP 503. Go's moveToCmd.isDone (commands.go:127-130) requires
-            # both position within tolerance and |velocity| < speedTol on both axes;
-            # mirror that so the dish has settled before we POST. Position comes from
-            # the broadcast (no velocity), so the velocity half is a status read
-            # (trapped like the completion loop), read only once the position
-            # arrives. Abort-aware; yield dsleep, not time.sleep (freezes reactor).
+            # The Go TCS refuses a /path as busy until the move-to is done, which it
+            # judges from the ACU's raw current and commanded positions, never the sky
+            # target (moveToCmd.isDone at TCS b7bbbf9), so the gate reads the same
+            # fields (_preset_arrived). dsleep, not time.sleep: this runs on the reactor.
             slew_deadline = time.time() + SLEW_TIMEOUT_SEC
+            reason, status = 'no status read', None
             while True:
                 if session.status == 'stopping':
                     self.log.info(f'{job}: abort requested during slew, sending /abort')
-                    yield threads.deferToThread(self._safe_abort, tcs)
-                    return True, f'{job} aborted during slew; /abort sent.'
-                pos = yield threads.deferToThread(self._current_encoder_azel, tcs)
-                if pos is not None:
-                    az_now, el_now, _ = pos
-                    daz = abs((az_now - enc_az + 180.0) % 360.0 - 180.0)
-                    if daz <= SLEW_ARRIVAL_TOL_DEG and abs(el_now - enc_el) <= SLEW_ARRIVAL_TOL_DEG:
-                        # Position arrived; confirm both axes stopped before
-                        # POSTing (closes the 503 race at the source). A failed or
-                        # velocity-less read leaves the axes "not known to be
-                        # stopped", so keep polling until the timeout.
-                        try:
-                            status = yield threads.deferToThread(tcs.get_status)
-                            if self._axes_stopped(status):
-                                break
-                        except (Exception, SystemExit) as e:
-                            self.log.warn(
-                                f'{job}: velocity read during slew gate failed: {e}')
+                    sent, note = yield threads.deferToThread(self._safe_abort, tcs)
+                    return self._stop_outcome(job, sent, note, ' during slew')
+                # Sleep before each read: the Go TCS answers the move-to when its
+                # loop takes it, before MoveTo sets the new preset and Preset modes.
+                yield dsleep(SLEW_STATUS_POLL_SEC)
+                # A failed read leaves the move "not known to be done", so keep
+                # polling until the timeout.
+                try:
+                    status = yield threads.deferToThread(tcs.get_status)
+                except (Exception, SystemExit) as e:
+                    reason = f'status read failed ({e})'
+                    self.log.warn('{job}: status read during slew gate failed: {e}', job=job, e=e)
+                else:
+                    arrived, reason = self._preset_arrived(status, enc_az, enc_el)
+                    if arrived:
+                        break
                 if time.time() > slew_deadline:
+                    # The move may still be running: stop it before the lock goes.
+                    sent, note = yield threads.deferToThread(self._safe_abort, tcs)
+                    outcome = self._abort_outcome(sent, note)
+                    readings = {key: (status or {}).get(key) for key in (
+                        'AzimuthMode', 'ElevationMode',
+                        'AzimuthCurrentPosition', 'ElevationCurrentPosition',
+                        'AzimuthCommandedPosition', 'ElevationCommandedPosition')}
                     return False, (
                         f'{job}: slew to scan start timed out '
-                        f'(target az={enc_az:.3f}, el={enc_el:.3f}).')
-                yield dsleep(SLEW_POLL_SEC)
+                        f'(target az={enc_az:.3f}, el={enc_el:.3f}; last unmet: {reason}; '
+                        f'last reading {readings}); {outcome}.')
 
-            # Re-floor start_time now the slew is done: the slew may have eaten into
-            # a near-now scan's lead, leaving start_time below the Go TCS minimum
-            # (commands.go:253). The completion end-time below reads this same
-            # start_time, so it stays consistent.
+            # Each attempt re-floors start_time (see SCAN_DISPATCH_BUFFER_SEC), as
+            # waiting eats lead.
             original_start = payload["start_time"]
-            payload = refloor_payload_start_time(payload, time.time())
-            drift = refloor_drift_seconds(original_start, payload)
-            if drift > MAX_REFLOOR_DRIFT_SEC:
-                # The slew ate so far into the lead that the baked build-time az/el
-                # track is stale: it tracks the source's old sky position, and the
-                # re-floor only shifts when it plays, not where. Refuse rather than
-                # POST a boresight lagging the sky by ~az_rate*drift. Retryable: the
-                # next dispatch rebuilds from current ephemeris.
+            scan_msg = None
+            for attempt in range(1, TCS_BUSY_RETRY_MAX + 1):
+                # An abort can land during the slew gate's last read or a retry wait;
+                # a POST then would race the completion loop's /abort at the ACU.
+                if session.status == 'stopping':
+                    self.log.info(f'{job}: abort requested before /path POST, sending /abort')
+                    sent, note = yield threads.deferToThread(self._safe_abort, tcs)
+                    return self._stop_outcome(job, sent, note, ' before /path POST')
+
+                payload = refloor_payload_start_time(payload, time.time())
+                drift = refloor_drift_seconds(original_start, payload)
+                if drift > MAX_REFLOOR_DRIFT_SEC:
+                    # The baked track would lag the sky (see MAX_REFLOOR_DRIFT_SEC).
+                    return False, (
+                        f'{job}: post-slew re-floor advanced start_time by '
+                        f'{drift:.1f} s (> {MAX_REFLOOR_DRIFT_SEC:.0f} s); the slew '
+                        f'consumed the scan lead and the trajectory geometry is '
+                        f'stale. Refusing to POST; redispatch.')
+
+                self.log.info(
+                    f'{job}: posting trajectory to /path '
+                    f'(attempt {attempt}/{TCS_BUSY_RETRY_MAX})')
+                try:
+                    scan_msg = yield threads.deferToThread(tcs.scan_pattern, payload)
+                except (Exception, SystemExit) as e:
+                    # As for the slew; no re-POST, since the path may have reached the TCS.
+                    self.log.error('{job}: /path POST failed in transport: {e}', job=job, e=e)
+                    sent, note = yield threads.deferToThread(self._safe_abort, tcs)
+                    # Read once the abort has completed: one sent before the path start may still
+                    # have reached the Go TCS after it.
+                    if sent and time.time() >= payload['start_time']:
+                        outcome = (', but had not completed before the path start, so the scan may have run'
+                                   + (f' ({note})' if note else ''))
+                    else:
+                        outcome = self._launch_abort_outcome(sent, note)
+                    return False, (
+                        f'{job}: /path POST failed in transport ({e}); the Go TCS '
+                        f'may have queued the path, so /abort was sent{outcome}; '
+                        f'redispatch.')
+                scan_code = tcs_response_status(scan_msg)
+                self.log.info(f'{job}: /path response code {scan_code}')
+                if scan_code == 200:
+                    break
+                if scan_code is None:
+                    if attempt < TCS_BUSY_RETRY_MAX:
+                        yield dsleep(TCS_BUSY_RETRY_DELAY_SEC)
+                    continue
+                if scan_code >= 500:
+                    # The OCS API failed, so the path may have reached the TCS.
+                    self.log.error('{job}: /path POST failed at the OCS API: {reason}',
+                                   job=job, reason=tcs_response_reason(scan_msg))
+                    sent, note = yield threads.deferToThread(self._safe_abort, tcs)
+                    outcome = self._launch_abort_outcome(sent, note)
+                    return False, (
+                        f'{job}: /path POST failed at the OCS API '
+                        f'({tcs_response_reason(scan_msg)}); the Go TCS may have '
+                        f'queued the path, so /abort was sent{outcome}; redispatch.')
                 return False, (
-                    f'{job}: post-slew re-floor advanced start_time by '
-                    f'{drift:.1f} s (> {MAX_REFLOOR_DRIFT_SEC:.0f} s); the slew '
-                    f'consumed the scan lead and the trajectory geometry is '
-                    f'stale. Refusing to POST; redispatch.')
-
-            # Final abort gate before the POST. The slew gate's last status read is
-            # off-reactor, so an abort can flip the session to 'stopping' after the
-            # loop breaks; without this re-check we'd POST /path for a just-aborted
-            # scan (then the completion loop sends /abort, racing it at the ACU).
-            # Mirror the other gates: /abort and return.
-            if session.status == 'stopping':
-                self.log.info(f'{job}: abort requested before /path POST, sending /abort')
-                yield threads.deferToThread(self._safe_abort, tcs)
-                return True, f'{job} aborted before /path POST; /abort sent.'
-
-            self.log.info(f'{job}: posting trajectory to /path')
-            scan_msg = yield threads.deferToThread(tcs.scan_pattern, payload)
-            # 503 -> {} again (the slew-gate's anticipated "slew not settled");
-            # read via tcs_response_status for a graceful "scan not launched".
-            scan_code = tcs_response_status(scan_msg)
-            self.log.info(f'{job}: /path response code {scan_code}')
-            if scan_code != 200:
+                    f'{job}: /path POST refused '
+                    f'({tcs_response_reason(scan_msg)}); scan not launched.')
+            else:
+                # Every attempt was refused as busy.
                 return False, (
-                    f'{job}: Go TCS rejected /path '
-                    f'(HTTP {scan_code}); scan not launched.')
+                    f'{job}: Go TCS stayed busy for {TCS_BUSY_RETRY_MAX} /path '
+                    f'attempts ({tcs_response_reason(scan_msg)}); '
+                    f'scan not launched.')
 
-            # Completion-aware, abort-aware wait. Go TCS /path is fire-and-forget
-            # (HTTP 200 == accepted, not done; Go never calls back). Detect
-            # completion via the stack-drained signal (parity with
-            # commands.go:195-197), backstopped by the absolute scan end time so a
-            # status-read fault can never hang the Process holding azel_lock.
-            # start_time is absolute Unix; points[-1][0] is relative seconds. The
-            # drained decision (strict 9999 + running-observed latch) is delegated
-            # to ScanCompletionLatch.
+            self._publish_phase(session, phase_data, 'holding', start_time=payload['start_time'])
+
+            # /path is fire-and-forget: a 200 means queued. Completion is the stack-drained
+            # test of startPattern's isDone (TCS b7bbbf9), delegated to ScanCompletionLatch,
+            # with the scan end plus SCAN_SETTLE_SEC as a backstop so a failing status read
+            # cannot hold azel_lock. start_time is absolute Unix; points[-1][0] is relative.
             end_unix = payload['start_time'] + payload['points'][-1][0]
             deadline = end_unix + SCAN_SETTLE_SEC
             latch = ScanCompletionLatch(payload['start_time'])
+            stack_filled = False  # a read showed THIS track's points on the stack
+            stack_read = False    # at least one status read returned a stack count
+            never_uploaded = (
+                f'{job}: the Go TCS accepted the path but no status read showed its points on '
+                f'the ACU program-track stack (never uploaded, never started, or played while '
+                f'the reads failed; see the Go TCS log)')
+            left_track_reads = 0  # consecutive reads of points left with no axis in ProgramTrack
             while True:
                 if session.status == 'stopping':
                     self.log.info(f'{job}: abort requested, sending /abort')
-                    yield threads.deferToThread(self._safe_abort, tcs)
-                    return True, f'{job} aborted; /abort sent.'
+                    sent, note = yield threads.deferToThread(self._safe_abort, tcs)
+                    return self._stop_outcome(job, sent, note)
+                if (phase_data['phase'] != 'scanning' and stack_filled
+                        and time.time() >= payload['start_time']):
+                    self._publish_phase(session, phase_data, 'scanning')
                 try:
                     status = yield threads.deferToThread(tcs.get_status)
-                    # RAW /acu/status free-stack key is the long ACU alias 'Qty of
-                    # free program track stack positions'; accept either that or
-                    # the post-mapping 'Free_upload_positions'.
+                except (Exception, SystemExit) as e:
+                    # aculib.get_status() raises SystemExit on ConnectionError, which
+                    # `except Exception` would NOT catch. Trap it so a transient blip
+                    # cannot kill the Process; the time backstop still bounds the wait.
+                    self.log.warn('{job}: status read failed during wait: {e}', job=job, e=e)
+                else:
+                    # StatusGeneral8100 field names, not the ACU's long aliases
+                    # (telescope_status in api/app/telescope.py at OCS c515a51).
                     free = status.get('QtyOfFreeProgramTrackStackPositions')
+                    points, playing = self._program_track_state(status)
+                    if points is not None:
+                        stack_read = True
+                        stack_filled = stack_filled or (points > 0 and playing is not False)
+                    now = time.time()
+                    if (stack_read and not stack_filled
+                            and now >= payload['start_time'] + SCAN_EARLY_DRAIN_TOL_SEC):
+                        # Never on the stack by the tolerance past the start: fail now, as
+                        # an empty or stale stack never trips the drained latch.
+                        sent, note = yield threads.deferToThread(self._safe_abort, tcs)
+                        outcome = self._abort_outcome(sent, note)
+                        self.log.error(never_uploaded)
+                        return False, f'{never_uploaded}; {outcome}. Redispatch.'
+                    if (stack_filled and now >= payload['start_time']
+                            and points and playing is False):
+                        # The ACU left the track (a fault, or a stop from elsewhere).
+                        left_track_reads += 1
+                        if left_track_reads >= TRACK_LEFT_CONFIRM_READS:
+                            sent, note = yield threads.deferToThread(self._safe_abort, tcs)
+                            outcome = self._abort_outcome(sent, note)
+                            return False, (
+                                f'{job}: the ACU left program track with {points} points '
+                                f'unplayed; scan interrupted ({outcome}). Redispatch.')
+                    else:
+                        left_track_reads = 0
                     vaz = status.get('AzimuthCurrentVelocity')
                     vel = status.get('ElevationCurrentVelocity')
-                    az_mode = status.get('AzimuthMode')
-                    el_mode = status.get('ElevationMode')
-                    if latch.update(free=free, vaz=vaz, vel=vel, now_unix=time.time(),
-                                    az_mode=az_mode, el_mode=el_mode):
+                    done = latch.update(free=free, vaz=vaz, vel=vel, now_unix=now,
+                                        az_mode=status.get('AzimuthMode'),
+                                        el_mode=status.get('ElevationMode'))
+                    if done:
+                        if not stack_filled:
+                            # Drained but never filled: /abort in case the Go TCS
+                            # still holds the command.
+                            sent, note = yield threads.deferToThread(self._safe_abort, tcs)
+                            outcome = self._abort_outcome(sent, note)
+                            self.log.error(never_uploaded)
+                            return False, f'{never_uploaded}; {outcome}. Redispatch.'
+                        # A track cut short (see SCAN_EARLY_DRAIN_TOL_SEC): stop
+                        # whatever is left before the lock goes.
+                        early = end_unix - time.time()
+                        if early > SCAN_EARLY_DRAIN_TOL_SEC:
+                            self.log.error(
+                                f'{job}: program-track stack drained {early:.0f} s '
+                                f'before the scheduled end; scan truncated.')
+                            sent, note = yield threads.deferToThread(self._safe_abort, tcs)
+                            outcome = self._abort_outcome(sent, note)
+                            return False, (
+                                f'{job}: program-track stack drained {early:.0f} s '
+                                f'before the scheduled end; scan truncated (the Go TCS '
+                                f'may have dropped the track or rejected points at '
+                                f'upload); {outcome}. Redispatch.')
                         self.log.info(f'{job}: scan complete (stack drained).')
-                        break
-                except (Exception, SystemExit) as e:
-                    # aculib.get_status() raises SystemExit on ConnectionError
-                    # (aculib.py:138-143), which `except Exception` would NOT catch.
-                    # Trap it so a transient blip cannot kill the Process; the time
-                    # backstop still bounds the wait.
-                    self.log.warn(f'{job}: status read failed during wait: {e}')
+                        return True, 'scan complete (stack drained at scheduled end)'
                 if time.time() >= deadline:
+                    if stack_read and not stack_filled:
+                        # Never on the stack, for a path shorter than the tolerance or
+                        # reads failing after the start: as at the exits above.
+                        sent, note = yield threads.deferToThread(self._safe_abort, tcs)
+                        outcome = self._abort_outcome(sent, note)
+                        self.log.error(never_uploaded)
+                        return False, f'{never_uploaded}; {outcome}. Redispatch.'
+                    # No drained signal: release azel_lock as an unconfirmed success.
                     self.log.info(f'{job}: scan end reached (time backstop).')
-                    break
+                    return True, 'scan end reached (time backstop; completion unconfirmed)'
                 yield dsleep(SCAN_COMPLETION_POLL_SEC)
-
-        return True, scan_msg.text
 
     @ocs_agent.param('scan_params', type=dict)
     @ocs_agent.param('scheduled_t0_unix', type=float, default=None)
@@ -1126,26 +1696,37 @@ class ACUAgent:
         ``/path``. Abortable mid-scan (aborter -> session ``'stopping'`` -> Go TCS
         ``/abort``).
 
-        Velocity frame: the commanded az velocity is the planner's solved
-        MOUNT-frame drift (same frame as ``constant_el_scan``, NOT the on-sky frame
-        pong/daisy take); ``cos(el)`` is implicit in the elevation-fixed az track
-        and NOT re-applied.
+        Progress is in ``session.data``, as for :meth:`constant_el_scan`.
+
+        Velocity frame: the commanded az velocity is the per-leg speed
+        (``az_speed`` when given, else derived by the planner) plus the solved
+        drift ``v_az``, both MOUNT-frame azimuth-coordinate deg/s (same frame as
+        ``constant_el_scan``, NOT the on-sky frame pong/daisy take); ``cos(el)``
+        is implicit in the elevation-fixed az track and NOT re-applied.
 
         **Centred only.** Dispatches the on-axis, full-array case (``footprint="c"``,
         uncommanded boresight rotator). The off-centre single-module case and a
         commanded ``boresight_rot`` are gated off in ``build_source_payload``
-        (Nasmyth port direction + ``boresight_rot`` value both unconfirmed);
-        requesting either raises ``ValueError``.
+        (the bay layout is not yet checked on the sky; no boresight rotation is
+        confirmed for Prime-Cam); requesting either, or sending ``module``, the
+        field scans' key, raises ``ValueError``; a ``footprint`` that names no bay
+        (a removed ``i1``) raises the library's ``KeyError``.
 
         Parameters:
             scan_params (dict): Source-CES spec, modeled on
                 ``fyst_trajectories.plan_source_ces``. Source: ``body`` (str) OR
-                ``ra`` + ``dec`` (deg); plus ``el_bore`` (deg). Optional: ``mode``
-                ('rising'/'setting'), ``footprint`` (must be 'c'/'center' while the
-                gate stands), ``boresight_rot`` (must be None), ``pm_ra``/``pm_dec``,
+                ``ra`` + ``dec`` (deg); ``el_bore`` (deg), or none for the planner
+                to derive it, and ``mode`` unless given, from the scan's start (the
+                pass starts at or shortly after it). Optional: ``mode``
+                ('rising'/'setting'), ``footprint`` (must name the centre module,
+                'c', 'center' or 'IM0' in any case, while the gate stands),
+                ``boresight_rot`` (must be None), ``pm_ra``/``pm_dec``,
                 ``ref_epoch``, ``timestep``, ``sampling_step_seconds``, ``az_accel``,
                 ``az_padding``, ``az_branch``, ``allow_partial``, ``v_az``,
-                ``window``.
+                ``az_speed`` (deg/s, mount frame), ``az_throw`` (deg; replaces the
+                padded throw, so leave ``az_padding`` unset), ``dwell`` (s),
+                ``footprint_margin`` (deg, non-negative; widens the centre module's
+                footprint on every side), ``window`` (needs ``el_bore``).
             scheduled_t0_unix (float): Scheduled start in Unix seconds (the
                 plan_source_ces search anchor), or None to start as soon as the
                 dispatch buffer allows.
@@ -1169,6 +1750,8 @@ class ACUAgent:
         ``/path``. Abortable mid-scan (aborter -> session ``'stopping'`` -> Go TCS
         ``/abort``).
 
+        Progress is in ``session.data``, as for :meth:`constant_el_scan`.
+
         Velocity frame: ``scan_params['velocity']`` is ON-SKY (tangent-plane)
         deg/s, a DIFFERENT frame from ``constant_el_scan`` / ``source_scan``. The
         planner maps it to the mount frame via the field geometry; pass the
@@ -1179,7 +1762,9 @@ class ACUAgent:
                 ``fyst_trajectories.plan_pong_scan``. Required: ``ra_center``,
                 ``dec_center``, ``width``, ``height`` (deg); ``velocity``
                 (on-sky deg/s), ``spacing`` (deg), ``num_terms`` (int). Optional:
-                ``angle`` (deg), ``n_cycles`` (int), ``timestep`` (s).
+                ``angle`` (deg), ``n_cycles`` (int), ``timestep`` (s), ``module``
+                (a bay name, or several for their mean position, at which the
+                field is scanned; ``footprint`` is refused).
             scheduled_t0_unix (float): Scheduled start in Unix seconds, or None
                 to start as soon as the dispatch buffer allows. Pong uses
                 start_time literally (no forward search).
@@ -1203,6 +1788,8 @@ class ACUAgent:
         ``/path``. Abortable mid-scan (aborter -> session ``'stopping'`` -> Go TCS
         ``/abort``).
 
+        Progress is in ``session.data``, as for :meth:`constant_el_scan`.
+
         Velocity frame: ``scan_params['velocity']`` is ON-SKY (tangent-plane)
         deg/s, the SAME frame as Pong, DIFFERENT from ``constant_el_scan`` /
         ``source_scan``. The planner maps it to the mount frame; pass the
@@ -1214,7 +1801,9 @@ class ACUAgent:
                 (deg); ``radius`` (deg), ``velocity`` (on-sky deg/s),
                 ``turn_radius`` (deg), ``avoidance_radius`` (deg), and
                 ``start_acceleration`` (deg/s^2), ``duration`` (s). Optional:
-                ``y_offset`` (deg), ``timestep`` (s).
+                ``y_offset`` (deg), ``timestep`` (s), ``module`` (a bay name, or
+                several for their mean position, at which the source is scanned;
+                ``footprint`` is refused).
             scheduled_t0_unix (float): Scheduled start in Unix seconds, or None
                 to start as soon as the dispatch buffer allows. Daisy uses
                 start_time literally (no forward search).
@@ -1228,39 +1817,33 @@ class ACUAgent:
     def abort(self, session, params):
         """abort()
 
-        **Task** - Send a Go TCS ``/abort`` to stop any in-progress telescope
-        motion. Routes through the shared :meth:`_safe_abort` path (agrees with the
-        in-Process stop handlers) and is SAFE with no scan running. The Go TCS
-        accepts ``/abort`` regardless, and a transport failure is swallowed +
-        reported. Builds a fresh per-call client (see :meth:`_make_tcs`) so its
-        ``/abort`` POST cannot collide with a running scan's status reads on a
-        shared ``requests.Session``.
+        **Task** - Send a Go TCS ``/abort`` through :meth:`_safe_abort`, on a fresh
+        client (:meth:`_make_tcs`), after stopping every running typed scan Process
+        (:data:`SCAN_PROCESS_OPS`). Safe with nothing running: "nothing to abort"
+        succeeds unless the ACU still plays a program track, which is then stopped.
+        Fails, never raises, when the ``/abort`` or that stop is not confirmed.
 
-        Mid-scan abort is normally driven by stopping the running scan Process
-        directly (aborter -> session ``'stopping'`` -> Process sends its own
-        ``/abort`` and returns, releasing ``azel_lock``). This task ALSO does that
-        for any running typed scan Process (``self.agent.stop`` over
-        :data:`SCAN_PROCESS_OPS`) so an out-of-band abort cannot strand
-        ``azel_lock``: Go TCS ``/abort`` only cancel+Stops (NOT ProgramTrackClear),
-        so on an early abort the stack-drained latch never fires and, absent the
-        ``'stopping'`` signal, the scan loop would hold ``azel_lock`` to its
-        absolute scan-end backstop. ``OCSAgent.stop`` is safe + idempotent here: a
-        not-running/unknown op returns an error tuple we log and skip (no raise),
-        an already-stopping op is left alone, and it mutates session status only on
-        the reactor thread (touches no ``requests.Session``, no shared-Session
-        hazard). The immediate ``/abort`` below still fires so the mount stops even
-        with no Process running.
+        The scans are stopped because the Go TCS ``/abort`` sets Stop but leaves the
+        program-track stack, so the stack-drained test never passes and a scan not told
+        to stop would hold ``azel_lock`` until it failed on its own. ``OCSAgent.stop``,
+        which acts on the reactor thread, returns an error tuple for an op not running;
+        that is logged and skipped.
         """
         for op in SCAN_PROCESS_OPS:
             try:
                 status, msg, _ = self.agent.stop(op)
-                self.log.info(f'abort: stop({op}) -> {status}: {msg}')
+                self.log.info('abort: stop({op}) -> {status}: {msg}', op=op, status=status, msg=msg)
             except Exception as e:
-                self.log.warn(f'abort: stop({op}) failed (continuing): {e}')
-        ok = yield threads.deferToThread(self._safe_abort, self._make_tcs())
-        if ok:
-            return True, 'abort: Go TCS /abort sent; stop requested on any running scan.'
-        return False, 'abort: Go TCS /abort failed (transport error; see log).'
+                self.log.warn('abort: stop({op}) failed (continuing): {e}', op=op, e=e)
+        sent, note = yield threads.deferToThread(self._safe_abort, self._make_tcs())
+        detail = f' ({note})' if note else ''
+        if sent:
+            return True, (f'abort: Go TCS /abort sent{detail}; '
+                          'stop requested on any running scan.')
+        if note.startswith(TCS_NOTHING_TO_ABORT_MESSAGE):
+            return False, (f'abort: the Go TCS had nothing to abort, but the ACU is not known '
+                           f'to be stopped ({note}).')
+        return False, f'abort: Go TCS /abort failed{detail}; the dish may still be moving.'
 
 
     @ocs_agent.param('all_axes', default=False, type=bool)

@@ -24,9 +24,11 @@ Plus the dispatch-core guards:
 - Hardware-dynamics escalation: a velocity/acceleration breach anywhere raises
   ``TrajectoryValidationError``;
 - Dispatch-delay: Pong takes ``start_time`` literally, so its resolved start
-  equals the floored anchor and the guard passes trivially; the shared
-  :func:`enforce_dispatch_delay` is tested directly for raising-when-far, and the
-  buffer floor is verified.
+  equals the floored anchor: the guard passes a start within
+  ``MAX_DISPATCH_DELAY_SEC`` of the dispatch and refuses one further out with a
+  sentence about the start time, not the elevation advice of the planners that
+  search for a crossing; the shared :func:`enforce_dispatch_delay` is also
+  tested directly, and the buffer floor is verified.
 
 DATE-STABILITY: Pong uses ``start_time`` literally, so the only date dependence is
 whether the field is observable (sun-safety disabled in the fixture). Every build
@@ -54,15 +56,15 @@ from pcs.agents.acu_interface.trajectory import (
 )
 
 # Go TCS /path contract constants (commands.go checkAzEl + pathCmd.Check()).
-AZ_MIN_TCS = -180.0  # commands.go:18
-AZ_MAX_TCS = 360.0  # commands.go:19
-EL_MIN_TCS = -90.0  # commands.go:24
-EL_MAX_TCS = 180.0  # commands.go:25
-AZ_SPEED_MAX_TCS = 3.0  # commands.go:20
-EL_SPEED_MAX_TCS = 1.5  # commands.go:26
-MIN_DT_TCS = 0.05  # commands.go:261
-MIN_LEAD_TCS = 9.8  # commands.go:253
-FIRST_N_CHECKED = 100  # commands.go:269
+AZ_MIN_TCS = -180.0  # azimuthMin at TCS b7bbbf9
+AZ_MAX_TCS = 360.0  # azimuthMax at TCS b7bbbf9
+EL_MIN_TCS = -90.0  # elevationMin at TCS b7bbbf9
+EL_MAX_TCS = 180.0  # elevationMax at TCS b7bbbf9
+AZ_SPEED_MAX_TCS = 3.0  # azimuthSpeedMax at TCS b7bbbf9
+EL_SPEED_MAX_TCS = 1.5  # elevationSpeedMax at TCS b7bbbf9
+MIN_DT_TCS = 0.05  # pathCmd.Check at TCS b7bbbf9
+MIN_LEAD_TCS = 9.8  # checkProgramTrackStartTime at TCS b7bbbf9
+FIRST_N_CHECKED = 100  # pathCmd.Check at TCS b7bbbf9
 
 # A representative Pong over a field well inside the FYST limits at the epoch.
 REPRESENTATIVE_PARAMS = dict(
@@ -124,21 +126,21 @@ def test_start_time_absolute_and_respects_buffer_floor(built):
     result, now = built
     start_time = result["payload"]["start_time"]
     assert start_time > 1e9
-    assert start_time >= now + MIN_LEAD_TCS  # commands.go:253
+    assert start_time >= now + MIN_LEAD_TCS  # checkProgramTrackStartTime at TCS b7bbbf9
     assert start_time >= now + SCAN_DISPATCH_BUFFER_SEC - 1e-6  # the 10 s floor
 
 
 def test_points_is_n_by_5(built):
     result, _ = built
     points = result["payload"]["points"]
-    assert len(points) > 0  # commands.go:246 "no points in path"
+    assert len(points) > 0  # pathCmd.Check at TCS b7bbbf9, "no points in path"
     assert all(len(p) == 5 for p in points)
 
 
 def test_consecutive_dt_at_least_50ms(built):
     result, _ = built
     times = np.array([p[0] for p in result["payload"]["points"]])
-    assert np.diff(times).min() >= MIN_DT_TCS  # commands.go:261
+    assert np.diff(times).min() >= MIN_DT_TCS  # pathCmd.Check at TCS b7bbbf9
 
 
 def test_first_100_points_satisfy_checkAzEl(built, site):
@@ -204,8 +206,10 @@ def test_too_fast_velocity_escalates_h3(site):
     """An on-sky velocity that pushes the mount az rate past 3.0 deg/s raises.
 
     On-sky velocity 4.0 at el~45 -> mount az ~5.6 deg/s, well over the Go TCS
-    hardware ceiling (3.0, commands.go:20). The agent must reject it BEFORE the
-    POST (Go TCS only validates the first 100 points). Date-stable fixed ``now``.
+    hardware ceiling (3.0, azimuthSpeedMax at TCS ``b7bbbf9``). The agent must reject
+    it BEFORE the POST (the Go TCS checks the first 100 points before accepting
+    and the rest only as it uploads them, where a breach ends the track mid-scan).
+    Date-stable fixed ``now``.
     """
     fast = dict(REPRESENTATIVE_PARAMS, velocity=4.0, spacing=0.5)
     with warnings.catch_warnings():
@@ -222,9 +226,9 @@ def test_too_fast_velocity_escalates_h3(site):
 
 
 # ---------------------------------------------------------------------------
-# Dispatch-delay guard. Pong's start == the floored anchor, so the guard
-# passes trivially on a real scan; the shared helper is tested directly for the
-# raising-when-far behaviour.
+# Dispatch-delay guard. Pong's start == the floored anchor, so the guard passes
+# a start within MAX_DISPATCH_DELAY_SEC of the dispatch and refuses a scheduled
+# start further out; the shared helper is also tested directly.
 # ---------------------------------------------------------------------------
 
 
@@ -241,6 +245,25 @@ def test_pong_passes_default_dispatch_delay_guard(site):
         )  # default max_dispatch_delay_sec
     delay = result["payload"]["start_time"] - FIXED_NOW
     assert 0.0 < delay <= MAX_DISPATCH_DELAY_SEC
+
+
+def test_a_start_an_hour_out_is_refused_with_advice_about_the_start(site):
+    """A pong scheduled an hour out is refused under the default bound, and the
+    refusal says to dispatch it closer to its time: a pong starts at its
+    scheduled time, so the elevation advice the crossing-searching planners give
+    does not apply to it."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        with pytest.raises(DispatchDelayError, match=r"dispatched closer to its time") as excinfo:
+            build_pong_payload(
+                scan_params=REPRESENTATIVE_PARAMS,
+                current_az=200.0,
+                current_el=60.0,
+                site=site,
+                scheduled_t0_unix=FIXED_NOW + 3600.0,
+                now_unix=FIXED_NOW,
+            )  # default max_dispatch_delay_sec
+    assert "promptly-reachable elevation" not in str(excinfo.value)
 
 
 def test_shared_dispatch_delay_helper_raises_when_far():

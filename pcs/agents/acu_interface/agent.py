@@ -113,7 +113,7 @@ class ACUAgent:
             If True, immediately start the main monitoring processes
             for status and UDP data.
     """
-    def __init__(self, agent, config, device='acu_sim', startup=False):
+    def __init__(self, agent, config, device='acu_sim', startup=False, ignore_axes=None):
         self.agent = agent
         #logging
         self.log = agent.log
@@ -193,6 +193,15 @@ class ACUAgent:
         # if max_el:
         #     self.log.warn(f'Override: max_el={max_el}')
         #     self.motion_limits['elevation']['upper'] = max_el
+
+        # Axes to ignore.
+        self.ignore_axes = self.acu_conf.get('ignore_axes', [])
+        if ignore_axes is not None:
+            self.ignore_axes = [x for x in ignore_axes if x != 'none']
+        if len(self.ignore_axes):
+            assert all([x in ['az', 'el', 'third'] for x in self.ignore_axes])
+            agent.log.warn('Note ignore_axes={i}', i=self.ignore_axes)
+        
         '''#########################################'''
 
         #register processes
@@ -494,6 +503,7 @@ class ACUAgent:
                     self.agent.publish_to_feed('acu_status_influx', influx_block)
 
             data_blocks.update(new_blocks)
+            yield dsleep(0.2) #prevents the HTTP 503 error
 
         return True, 'Acquisition exited cleanly.'
 
@@ -624,6 +634,46 @@ class ACUAgent:
         handler.stopListening()
         #self.agent.feeds['acu_udp_stream'].flush_buffer()
         return True, 'Acquisition exited cleanly.'
+
+    ###########################################
+    #currently needed for stop_and_clear to work
+
+    @inlineCallbacks
+    def _set_modes(self, az=None, el=None, third=None):
+        """Helper for changing individual axis modes.  Respects ignore_axes.
+
+        When setting one axis it is often necessary to write others as
+        well.  The current mode is first queried, and written back
+        unmodified.
+
+        """
+        modes = list((yield self.acu_control.mode(size=3)))
+        changes = [False, False, False]
+        for i, (k, v) in enumerate([('az', az), ('el', el), ('third', third)]):
+            if k not in self.ignore_axes and v is not None:
+                changes[i] = True
+                modes[i] = v
+        if not any(changes):
+            return
+        if not changes[2]:
+            yield self.acu_control.mode(modes[:2])
+        else:
+            yield self.acu_control.mode(modes)
+
+    @inlineCallbacks
+    def _stop(self, all_axes=False):
+        """Helper for putting all axes in Stop.  This will normally just issue
+        acu_control.stop(); but if any axes are being "ignored", and
+        the user has not passed all_axes=True, then it will avoid
+        changing the mode of those axes.
+
+        """
+        if all_axes or len(self.ignore_axes) == 0:
+            yield self.acu_control.stop()
+            return
+        yield self._set_modes('Stop', 'Stop', 'Stop')
+
+    ######################################################
 
     @ocs_agent.param('az', type=float)
     @ocs_agent.param('el', type=float)
@@ -817,6 +867,7 @@ class ACUAgent:
         """
         try:
             tcs.abort()
+            #tcs.clear()
             return True
         except (Exception, SystemExit) as e:
             self.log.warn(f'/abort failed (continuing cleanup): {e}')
@@ -1268,7 +1319,7 @@ class ACUAgent:
     def stop_and_clear(self, session, params):
         """stop_and_clear(all_axes=False)
 
-        **Task** - Change the azimuth, elevation, and 3rd axis modes
+        **Task** - Change the azimuth, elevation
         to Stop; also clear the ProgramTrack stack.
 
         Args:
@@ -1279,43 +1330,47 @@ class ACUAgent:
         def _read_modes():
             modes = [self.data['status']['summary']['Azimuth_mode'],
                      self.data['status']['summary']['Elevation_mode']]
-            if self.acu_config['platform'] == 'satp':
-                modes.append(self.data['status']['summary']['Boresight_mode'])
-            elif self.acu_config['platform'] in ['ccat', 'lat']:
-                modes.append(self.data['status']['corotator']['Corotator_mode'])
+            # if self.acu_conf['platform'] == 'satp':
+            #     modes.append(self.data['status']['summary']['Boresight_mode'])
+            # elif self.acu_conf['platform'] in ['ccat', 'lat']:
+            #     modes.append(self.data['status']['corotator']['Corotator_mode'])
             return modes
 
-        for i in range(6):
-            for short_name, mode in zip(['az', 'el', 'third'],
-                                        _read_modes()):
-                if (params['all_axes'] or short_name not in self.ignore_axes) and mode != 'Stop':
-                    break
-            else:
-                self.log.info('All axes in Stop mode')
-                break
-            yield self._stop(params['all_axes'])
-            self.log.info('Stop called (iteration %i)' % (i + 1))
-            yield dsleep(0.1)
+        # for i in range(6):
+        #     for short_name, mode in zip(['az', 'el', 'third'],
+        #                                 _read_modes()):
+        #         if (params['all_axes'] or short_name not in self.ignore_axes) and mode != 'Stop':
+        #             break
+        #     else:
+        #         self.log.info('All axes in Stop mode')
+        #         break
+        #     yield self._stop(params['all_axes'])
+        #     self.log.info('Stop called (iteration %i)' % (i + 1))
+        #     yield dsleep(0.1)
 
-        else:
-            msg = 'Failed to set all axes to Stop mode!'
-            self.log.error(msg)
-            return False, msg
+        # else:
+        #     msg = 'Failed to set all axes to Stop mode!'
+        #     self.log.error(msg)
+        #     return False, msg
 
-        for i in range(6):
-            free_stack = self.data['status']['summary']['Free_upload_positions']
-            if free_stack < FULL_STACK:
-                yield self.acu_control.http.Command('DataSets.CmdTimePositionTransfer',
-                                                    'Clear Stack')
-                self.log.info('Clear Stack called (iteration %i)' % (i + 1))
-                yield dsleep(0.1)
-            else:
-                self.log.info('Stack cleared')
-                break
-        else:
-            msg = 'Failed to clear the ProgramTrack stack!'
-            self.log.warn(msg)
-            return False, msg
+        yield self.acu_read.abort() #aborts telescope movement that may be taking place
+
+        # for i in range(6):
+        #     free_stack = self.data['status']['summary']['Free_upload_positions']
+        #     if free_stack < FULL_STACK:
+        #         yield self.acu_control.http.Command('DataSets.CmdTimePositionTransfer',
+        #                                             'Clear Stack')
+        #         self.log.info('Clear Stack called (iteration %i)' % (i + 1))
+        #         yield dsleep(0.1)
+        #     else:
+        #         self.log.info('Stack cleared')
+        #         break
+        # else:
+        #     msg = 'Failed to clear the ProgramTrack stack!'
+        #     self.log.warn(msg)
+        #     return False, msg
+
+        yield self.acu_read.clear() #sets az and el modes to "Stop" and clears ProgramTrack stack
 
         session.set_status('stopping')
         return True, 'Job completed'

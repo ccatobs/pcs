@@ -30,8 +30,12 @@ Dispatch-core guards covered here:
 - dispatch delay: a below-horizon field resolves a crossing many hours out;
   ``build_constant_el_payload`` rejects a resolved start more than
   ``max_dispatch_delay_sec`` out with ``DispatchDelayError`` (date-stable fixed
-  ``Time``). The contract tests pass ``max_dispatch_delay_sec=float("inf")`` so
-  the guard does not fire on REPRESENTATIVE_PARAMS (which resolve ~hours out).
+  ``Time``), advising a promptly-reachable elevation, or a dispatch closer to
+  the scheduled start when that start is itself past the bound. The contract
+  tests pass ``max_dispatch_delay_sec=float("inf")`` so the guard does not fire
+  on REPRESENTATIVE_PARAMS (which resolve ~hours out).
+- LSA window: the planner rejects ``rising`` alongside ``lsa_window``, so the
+  core drops ``rising`` there and a windowed scan builds either way.
 
 Process-level contracts (NOT here, they need the ocs/twisted framework; the
 DECISION logic is unit-tested ocs-free above and the runner is exercised in
@@ -39,18 +43,21 @@ DECISION logic is unit-tested ocs-free above and the runner is exercised in
 
 - completion: ``/path`` is fire-and-forget (HTTP 200 == accepted, not done; Go
   never calls back). The Process detects completion via the stack-drained signal
-  (free == 9999 + near-zero velocities), backstopped by the absolute scan end
-  time, so it releases ``azel_lock`` instead of spinning. ``mock_tcs`` exposes a
-  drained ``GET /acu/status`` for a Process-level harness.
+  (free == 9999 + near-zero velocities, read once ``ScanCompletionLatch`` has
+  armed), backstopped by the absolute scan end time, so it releases
+  ``azel_lock`` instead of spinning. ``mock_tcs`` exposes a
+  drained ``GET /status`` for a Process-level harness.
 - position-unknown refusal: refuses to dispatch (False, RETRYABLE) when no live
   encoder position is available rather than guessing a wrong-wrap ``current_az``.
   The ``get_status()`` ``SystemExit`` (aculib raises it on ConnectionError) is
   trapped.
-- slew-arrival gate: polls the broadcast until the dish reaches the slew target
-  before POSTing ``/path`` (a premature POST returns 503), and fails on a non-200
-  ``/path`` response.
+- slew-arrival gate: polls the ACU status until the move-to is done as the Go TCS
+  judges it (both axes in Preset, on their commanded position, stopped) before
+  POSTing ``/path`` (a premature POST meets a busy Go TCS), and fails on a
+  refused ``/path``.
 """
 
+import math
 import time
 import warnings
 
@@ -61,7 +68,9 @@ from astropy.time import Time
 from fyst_trajectories import get_fyst_site
 from fyst_trajectories.exceptions import ElevationBoundsError
 
+from pcs.agents.acu_interface import trajectory as traj_mod
 from pcs.agents.acu_interface.trajectory import (
+    MAX_DISPATCH_DELAY_SEC,
     MAX_REFLOOR_DRIFT_SEC,
     SCAN_DISPATCH_BUFFER_SEC,
     TCS_PROGRAM_TRACK_DRAINED,
@@ -71,22 +80,24 @@ from pcs.agents.acu_interface.trajectory import (
     build_constant_el_payload,
     refloor_drift_seconds,
     refloor_payload_start_time,
+    tcs_response_reason,
     tcs_response_status,
+    unknown_scan_param_keys,
 )
 
 # ---------------------------------------------------------------------------
 # Go TCS /path contract constants, transcribed from
 # telescope-control-system/commands.go (checkAzEl + pathCmd.Check()).
 # ---------------------------------------------------------------------------
-AZ_MIN_TCS = -180.0  # commands.go:18 azimuthMin
-AZ_MAX_TCS = 360.0  # commands.go:19 azimuthMax
-EL_MIN_TCS = -90.0  # commands.go:24 elevationMin
-EL_MAX_TCS = 180.0  # commands.go:25 elevationMax
-AZ_SPEED_MAX_TCS = 3.0  # commands.go:20 azimuthSpeedMax
-EL_SPEED_MAX_TCS = 1.5  # commands.go:26 elevationSpeedMax
-MIN_DT_TCS = 0.05  # commands.go:261 minimum sample interval
-MIN_LEAD_TCS = 9.8  # commands.go:253 program track starts too soon (< 9.8 s)
-FIRST_N_CHECKED = 100  # commands.go:269 first 100 coordinates checked
+AZ_MIN_TCS = -180.0  # azimuthMin at TCS b7bbbf9
+AZ_MAX_TCS = 360.0  # azimuthMax at TCS b7bbbf9
+EL_MIN_TCS = -90.0  # elevationMin at TCS b7bbbf9
+EL_MAX_TCS = 180.0  # elevationMax at TCS b7bbbf9
+AZ_SPEED_MAX_TCS = 3.0  # azimuthSpeedMax at TCS b7bbbf9
+EL_SPEED_MAX_TCS = 1.5  # elevationSpeedMax at TCS b7bbbf9
+MIN_DT_TCS = 0.05  # pathCmd.Check at TCS b7bbbf9, minimum sample interval
+MIN_LEAD_TCS = 9.8  # checkProgramTrackStartTime at TCS b7bbbf9 (< 9.8 s)
+FIRST_N_CHECKED = 100  # pathCmd.Check at TCS b7bbbf9, first 100 coordinates checked
 
 
 # A representative rising constant-el scan well inside the FYST limits.
@@ -174,7 +185,7 @@ def test_start_time_absolute_and_at_least_9p8s_out(built):
     # Absolute Unix seconds (not relative): jsontime() in commands.go treats
     # values < 100000 as relative-to-now, so an absolute stamp must be large.
     assert start_time > 1e9
-    # commands.go:253: rejected if < 9.8 s in the future.
+    # checkProgramTrackStartTime at TCS b7bbbf9: rejected if < 9.8 s in the future.
     assert start_time >= now + MIN_LEAD_TCS
 
 
@@ -187,7 +198,7 @@ def test_start_time_respects_buffer_floor(built):
 def test_points_is_n_by_5(built):
     result, _ = built
     points = result["payload"]["points"]
-    assert len(points) > 0  # commands.go:246 "no points in path"
+    assert len(points) > 0  # pathCmd.Check at TCS b7bbbf9, "no points in path"
     assert all(len(p) == 5 for p in points)
 
 
@@ -195,7 +206,7 @@ def test_consecutive_dt_at_least_50ms(built):
     result, _ = built
     times = np.array([p[0] for p in result["payload"]["points"]])
     dt = np.diff(times)
-    # commands.go:261: any pair closer than 0.05 s is rejected.
+    # pathCmd.Check at TCS b7bbbf9: any pair closer than 0.05 s is rejected.
     assert dt.min() >= MIN_DT_TCS
 
 
@@ -295,7 +306,8 @@ def test_too_high_accel_raises(site):
     """An az_accel whose quintic peak (1.5x) exceeds the HW ceiling raises.
 
     az_accel=5.0 -> peak 7.5 deg/s^2 > the Go TCS hardware ceiling of 6.0
-    (commands.go:21). The guard is analytic (1.5 * az_accel), not np.gradient.
+    (azimuthAccelMax at TCS b7bbbf9). The guard is analytic (1.5 * az_accel),
+    not np.gradient.
     """
     bad = dict(REPRESENTATIVE_PARAMS, az_accel=5.0)
     with warnings.catch_warnings():
@@ -388,12 +400,14 @@ def test_dispatch_delay_far_out_field_raises(site):
     2026-06-15T02:00 UTC, REPRESENTATIVE_PARAMS (RA=80, Dec=-40, el=50, rising)
     resolve a crossing ~11 h out (far past the 30-min default), so the guard
     refuses to slew and hold ``azel_lock``. Default ``max_dispatch_delay_sec``
-    (no override) is exercised on purpose.
+    (no override) is exercised on purpose. The search starts at the floored
+    dispatch time, so it is the field that is far, and the refusal advises a
+    promptly-reachable elevation, not a dispatch closer to the start.
     """
     now = Time("2026-06-15T02:00:00", scale="utc").unix
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        with pytest.raises(DispatchDelayError, match=r"after dispatch"):
+        with pytest.raises(DispatchDelayError, match=r"after dispatch") as excinfo:
             build_constant_el_payload(
                 scan_params=REPRESENTATIVE_PARAMS,
                 current_az=200.0,
@@ -401,6 +415,36 @@ def test_dispatch_delay_far_out_field_raises(site):
                 site=site,
                 now_unix=now,
             )
+    message = str(excinfo.value)
+    assert "promptly-reachable elevation" in message
+    assert "dispatched closer to its time" not in message
+
+
+def test_a_start_an_hour_out_is_refused_with_advice_about_the_start(site):
+    """A scheduled start an hour out, past the default bound, raises
+    DispatchDelayError, and the message advises a dispatch closer to that
+    start, not a promptly-reachable elevation: the search starts at the
+    scheduled start, so no elevation could bring the scan nearer.
+
+    Date-stable fixed ``now``: dispatched at 2026-06-15T12:10 UTC with the start
+    at 13:10, REPRESENTATIVE_PARAMS cross el 50 about 6 min after that start
+    (13:16), 1.1 h after dispatch.
+    """
+    now = Time("2026-06-15T12:10:00", scale="utc").unix
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        with pytest.raises(DispatchDelayError, match=r"after dispatch") as excinfo:
+            build_constant_el_payload(
+                scan_params=REPRESENTATIVE_PARAMS,
+                current_az=200.0,
+                current_el=60.0,
+                site=site,
+                scheduled_t0_unix=now + 3600.0,
+                now_unix=now,
+            )
+    message = str(excinfo.value)
+    assert "A scheduled start this far out must be dispatched closer to its time." in message
+    assert "promptly-reachable elevation" not in message
 
 
 def test_dispatch_delay_prompt_field_passes(site):
@@ -471,6 +515,129 @@ def test_goal_elevation_out_of_range_raises(site):
             )
 
 
+def test_lsa_window_builds_with_or_without_rising(site):
+    """An LSA-windowed scan builds whether ``rising`` is absent, True or False.
+
+    The window opens ~8 min after :data:`FIXED_NOW` and spans 5 deg of LST, so
+    all three builds start at the same instant, inside the default dispatch-delay
+    limit, where the elevation-crossing path would resolve ~11 h out.
+    """
+    base = {k: v for k, v in REPRESENTATIVE_PARAMS.items() if k != "rising"}
+    starts = []
+    for extra in ({}, {"rising": True}, {"rising": False}):
+        params = dict(base, lsa_window=[227.6, 232.6], **extra)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            result = build_constant_el_payload(
+                scan_params=params,
+                current_az=200.0,
+                current_el=60.0,
+                site=site,
+                now_unix=FIXED_NOW,
+            )
+        assert set(result["payload"].keys()) == {"start_time", "coordsys", "points"}
+        starts.append(result["payload"]["start_time"])
+    assert starts[0] == starts[1] == starts[2]
+    assert 0.0 < starts[0] - FIXED_NOW <= MAX_DISPATCH_DELAY_SEC
+
+
+@pytest.fixture
+def planner_calls(monkeypatch):
+    """Record the keyword arguments of each call of the planner, which still runs for real."""
+    calls = []
+    real = traj_mod.plan_constant_el_scan
+
+    def recording(*args, **kwargs):
+        calls.append(kwargs)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(traj_mod, "plan_constant_el_scan", recording)
+    return calls
+
+
+def _build_field_form(params, site):
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        build_constant_el_payload(
+            scan_params=params,
+            current_az=200.0,
+            current_el=60.0,
+            site=site,
+            now_unix=FIXED_NOW,
+            max_dispatch_delay_sec=float("inf"),
+        )
+
+
+@pytest.mark.parametrize("rising", [True, False])
+def test_rising_beside_lsa_window_is_not_forwarded_and_is_named(site, planner_calls, rising):
+    """The LSA window fixes the timing, so the field form drops ``rising`` beside
+    it and names it as ignored."""
+    params = dict(REPRESENTATIVE_PARAMS, lsa_window=[227.6, 232.6], rising=rising)
+    _build_field_form(params, site)
+    (kwargs,) = planner_calls
+    assert kwargs["rising"] is None
+    assert unknown_scan_param_keys("constant_el_scan", params) == ["rising"]
+
+
+def test_rising_is_named_only_beside_an_lsa_window():
+    assert unknown_scan_param_keys("constant_el_scan", REPRESENTATIVE_PARAMS) == []
+    params = dict(REPRESENTATIVE_PARAMS, lsa_window=[227.6, 232.6], rising=None)
+    assert unknown_scan_param_keys("constant_el_scan", params) == []
+
+
+def test_duration_in_the_field_form_is_not_forwarded_and_is_named(site, planner_calls):
+    """The field form sweeps for as long as the field takes to cross, so a
+    ``duration`` has no effect and is named as ignored; ``None`` is not."""
+    params = dict(REPRESENTATIVE_PARAMS, duration=600.0)
+    _build_field_form(params, site)
+    (kwargs,) = planner_calls
+    assert "duration" not in kwargs
+    assert unknown_scan_param_keys("constant_el_scan", params) == ["duration"]
+    params = dict(REPRESENTATIVE_PARAMS, duration=None)
+    assert unknown_scan_param_keys("constant_el_scan", params) == []
+
+
+#: The COSMOS_CE:CIB unit of the OpsDB seed (ccatobs/data-center): 5 deg of RA, on the sky at its Dec, by 4.167 deg.
+COSMOS_CE_PARAMS = dict(
+    ra_center=150.125, dec_center=2.1665, width=5.0 * math.cos(math.radians(2.1665)),
+    height=4.167, elevation=43.0, rising=True, velocity=1.0, az_accel=1.0,
+)
+
+#: A dispatch with the COSMOS_CE field rising through el 43 about 2 min later.
+COSMOS_CE_NOW = Time("2026-11-15T08:00:00", scale="utc").unix
+
+#: That unit's azimuth_range row (deg) at el 43, rising.
+COSMOS_CE_SEED_ROW = (59.7, 67.0)
+
+#: How far (deg) each end of the built range may sit from that row: the row
+#: is given to 0.1 deg and drawn its own way, and the built ends sit 0.14 and
+#: 0.22 deg inside it.
+SEED_ROW_TOL_DEG = 0.3
+
+
+def test_the_field_form_sweeps_the_seeds_row_with_no_padding_by_default(site, monkeypatch):
+    calls, blocks = [], []
+    real = traj_mod.plan_constant_el_scan
+
+    def recording(**kwargs):
+        calls.append(kwargs)
+        blocks.append(real(**kwargs))
+        return blocks[-1]
+
+    monkeypatch.setattr(traj_mod, "plan_constant_el_scan", recording)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        build_constant_el_payload(
+            scan_params=COSMOS_CE_PARAMS, current_az=60.0, current_el=43.0, site=site,
+            now_unix=COSMOS_CE_NOW,
+        )
+    (kwargs,) = calls
+    assert kwargs["az_padding"] == 0.0
+    computed = blocks[0].computed_params
+    assert abs(computed["az_start"] - COSMOS_CE_SEED_ROW[0]) < SEED_ROW_TOL_DEG
+    assert abs(computed["az_stop"] - COSMOS_CE_SEED_ROW[1]) < SEED_ROW_TOL_DEG
+
+
 # ---------------------------------------------------------------------------
 # ScanCompletionLatch: the stack-drained completion decision (driven ocs-free).
 # The headline test reproduces the OLD false-positive (an empty/drained stack read
@@ -512,21 +679,40 @@ def test_latch_arms_on_running_then_completes_on_drain():
     assert done is True
 
 
-def test_latch_arms_on_program_track_mode():
-    """ProgramTrack mode (any axis) arms the latch even if the stack never reads non-empty."""
+def test_latch_does_not_arm_on_program_track_mode_alone():
+    """ProgramTrack mode on a drained read does not arm the latch: a completed
+    earlier scan leaves the axes in ProgramTrack with the stack drained, and
+    startPattern at TCS dd7151b set the mode before its first upload landed. The
+    scheduled start still arms it."""
     start = 10_000.0
     latch = ScanCompletionLatch(start)
-    # Drained read but ProgramTrack reported -> armed, and (drained + stopped) completes.
-    done = latch.update(
-        free=9999,
-        vaz=0.0,
-        vel=0.0,
-        now_unix=start - 10.0,
-        az_mode="ProgramTrack",
-        el_mode="Stop",
-    )
-    assert done is True
-    assert latch.running_observed is True
+    assert latch.update(free=9999, vaz=0.0, vel=0.0, now_unix=start - 10.0,
+                        az_mode="ProgramTrack", el_mode="ProgramTrack") is False
+    assert latch.running_observed is False
+    assert latch.update(free=9999, vaz=0.0, vel=0.0, now_unix=start,
+                        az_mode="ProgramTrack", el_mode="ProgramTrack") is True
+
+
+@pytest.mark.parametrize("az_mode, el_mode, arms", [
+    ("ProgramTrack", "Stop", True),
+    ("Stop", "ProgramTrack", True),
+    ("Stop", "Stop", False),
+    ("Preset", "Preset", False),
+    (None, None, True),
+], ids=["azimuth-in-program-track", "elevation-in-program-track", "both-in-stop",
+        "both-in-preset", "no-modes-in-the-read"])
+def test_latch_arms_on_points_only_with_an_axis_in_program_track(az_mode, el_mode, arms):
+    """Points on the stack arm the latch while either axis is in ProgramTrack, and
+    on the count alone when the read carries no mode; points with both axes in Stop
+    or Preset are a stopped track's leftovers and do not. An armed latch then
+    completes on a drained, stopped read before the scheduled start."""
+    start = 10_000.0
+    latch = ScanCompletionLatch(start)
+    assert latch.update(free=6000, vaz=0.0, vel=0.0, now_unix=start - 20.0,
+                        az_mode=az_mode, el_mode=el_mode) is False
+    assert latch.running_observed is arms
+    assert latch.update(free=9999, vaz=0.0, vel=0.0, now_unix=start - 10.0,
+                        az_mode=az_mode, el_mode=el_mode) is arms
 
 
 def test_latch_arms_on_wallclock_past_start():
@@ -557,13 +743,21 @@ def test_latch_missing_fields_not_complete():
 # ---------------------------------------------------------------------------
 # tcs_response_status: 503-safe HTTP status read. aculib.post() returns {} (not
 # a Response) on a 503; this maps it to a graceful "scan not launched" instead of
-# an AttributeError on {}.status_code. Driven directly (ocs-free).
+# an AttributeError on {}.status_code. The OCS API that aculib addresses relays a
+# Go TCS refusal with HTTP 200 and Go's JSON body, which the helper reads too.
+# Driven directly (ocs-free).
 # ---------------------------------------------------------------------------
 
 
 class _FakeResponse:
-    def __init__(self, status_code):
+    def __init__(self, status_code, body=None):
         self.status_code = status_code
+        self._body = body
+
+    def json(self):
+        if self._body is None:
+            raise ValueError("no JSON body")  # as requests does on a non-JSON body
+        return self._body
 
 
 def test_tcs_response_status_503_returns_none():
@@ -572,11 +766,63 @@ def test_tcs_response_status_503_returns_none():
     assert tcs_response_status(None) is None
     # The Process guard is ``code != 200``; None is correctly treated as rejected.
     assert tcs_response_status({}) != 200
+    # {} keeps no body, so the failure text can only name the status.
+    assert tcs_response_reason({}) == "HTTP 503"
 
 
 def test_tcs_response_status_reads_real_response():
-    assert tcs_response_status(_FakeResponse(200)) == 200
+    assert tcs_response_status(_FakeResponse(200, {"status": "ok"})) == 200
     assert tcs_response_status(_FakeResponse(503)) == 503
+    # A body without a message reports FastAPI's 422 detail, the reason the OCS
+    # API refused the request itself.
+    unprocessable = _FakeResponse(422, {"detail": [{"msg": "field required"}]})
+    assert tcs_response_status(unprocessable) == 422
+    assert tcs_response_reason(unprocessable) == "[{'msg': 'field required'}]"
+
+
+def test_tcs_response_status_reads_a_busy_relayed_as_200():
+    """Go's busy, relayed by the OCS API as HTTP 200, reads as None (retryable),
+    as aculib's {} for a 503 does."""
+    busy = _FakeResponse(200, {"status": "error", "message": "busy"})
+    assert tcs_response_status(busy) is None
+    assert tcs_response_reason(busy) == "busy"
+
+
+def test_tcs_response_status_refuses_any_other_error_relayed_as_200():
+    """Any other Go refusal relayed as HTTP 200 reads as 400, Go's own status for
+    it, and its reason is the TCS's message."""
+    message = "program track starts too soon (< 10 seconds from now)"
+    refused = _FakeResponse(200, {"status": "error", "message": message})
+    assert tcs_response_status(refused) == 400
+    assert tcs_response_reason(refused) == message
+
+
+def test_tcs_response_status_reads_a_200_that_is_not_the_go_tcs_reply_as_502():
+    """Only the OCS API's accepted answer reads 200; a 200 whose body is neither it
+    nor a relayed refusal is not the Go TCS's reply, an intermediary failure (502)."""
+    assert tcs_response_status(_FakeResponse(200, {"status": "ok"})) == 200
+    assert tcs_response_status(_FakeResponse(200, ["not", "an", "object"])) == 502
+    assert tcs_response_status(_FakeResponse(200)) == 502
+
+
+def test_tcs_response_reason_words_an_ocs_api_error():
+    """An HTTP 500 without a JSON body is the OCS API's own failure (its hop to the
+    Go TCS raised): the status reads 500, which is no busy to retry, and the reason
+    says the TCS may or may not have taken the command."""
+    error = _FakeResponse(500)
+    assert tcs_response_status(error) == 500
+    assert tcs_response_reason(error) == (
+        "OCS API error HTTP 500 (the TCS may or may not have taken the command)")
+
+
+def test_tcs_response_reason_names_the_ocs_api_for_a_4xx_without_a_message():
+    """nginx's 413 for a body over its limit is an HTML page, not JSON: every Go
+    TCS refusal carries a message, so the reason names the OCS API or its proxy."""
+    too_large = _FakeResponse(413)
+    too_large.text = "<html><head><title>413 Request Entity Too Large</title></head></html>"
+    assert tcs_response_status(too_large) == 413
+    assert tcs_response_reason(too_large) == (
+        "HTTP 413 from the OCS API or its proxy, not the Go TCS")
 
 
 # ---------------------------------------------------------------------------
@@ -679,7 +925,14 @@ def test_refloor_drift_seconds_boundary_around_the_cap():
 fastapi = pytest.importorskip("fastapi", reason="FastAPI not available for mock-TCS test")
 from fastapi.testclient import TestClient  # noqa: E402
 
-from pcs.agents.acu_interface.tests.mock_tcs import PREFIX, create_mock_tcs  # noqa: E402
+from pcs.agents.acu_interface.tests.mock_tcs import (  # noqa: E402
+    GO_BUSY,
+    GO_NOTHING_TO_ABORT,
+    GO_START_TOO_SOON,
+    PREFIX,
+    create_mock_tcs,
+    gateway_refusal,
+)
 
 
 def test_mock_tcs_records_contract_valid_path(built):
@@ -726,12 +979,67 @@ def test_mock_tcs_rejects_wrong_coordsys():
     assert resp.status_code == 422
 
 
-def test_mock_tcs_abort_recorded():
+def test_mock_tcs_answers_abort_as_the_ocs_api_relays_it():
+    """The mock answers /abort as the OCS API relays the Go TCS: with no command
+    running, "nothing to abort" with HTTP 200; while an accepted /path runs, ok,
+    which stops it. Every /abort is counted."""
+    app = create_mock_tcs()
+    body = {"start_time": time.time() + 100.0, "coordsys": "Horizon",
+            "points": [[0.0, 100.0, 50.0, 0.5, 0.0]]}
+    with TestClient(app) as client:
+        idle = client.post(f"{PREFIX}/abort")
+        client.post(f"{PREFIX}/path", json=body)
+        stopped = client.post(f"{PREFIX}/abort")
+        again = client.post(f"{PREFIX}/abort")
+    assert [r.status_code for r in (idle, stopped, again)] == [200, 200, 200]
+    assert idle.json() == gateway_refusal(GO_NOTHING_TO_ABORT)
+    assert stopped.json() == {"status": "ok"}
+    assert again.json() == gateway_refusal(GO_NOTHING_TO_ABORT)
+    assert app.state.recorder.abort_count == 3
+
+
+def test_mock_tcs_status_serves_the_axis_modes():
+    """/status serves the axis modes beside the stack count, both "Stop" until a
+    test sets them, as the OCS API serves the ACU's StatusGeneral8100 fields."""
     app = create_mock_tcs()
     with TestClient(app) as client:
-        resp = client.post(f"{PREFIX}/abort")
-    assert resp.status_code == 200
-    assert app.state.recorder.abort_count == 1
+        before = client.get(f"{PREFIX}/status").json()
+        app.state.recorder.status.update(AzimuthMode="ProgramTrack",
+                                         QtyOfFreeProgramTrackStackPositions=5000)
+        after = client.get(f"{PREFIX}/status").json()
+    assert (before["AzimuthMode"], before["ElevationMode"]) == ("Stop", "Stop")
+    assert before["QtyOfFreeProgramTrackStackPositions"] == 9999
+    assert (after["AzimuthMode"], after["ElevationMode"]) == ("ProgramTrack", "Stop")
+    assert after["QtyOfFreeProgramTrackStackPositions"] == 5000
+
+
+def test_mock_tcs_move_to_presets_the_target():
+    """An accepted /move-to leaves both axes in Preset with the commanded position
+    on the request, as the Go TCS's MoveTo does with a zero pointing model."""
+    app = create_mock_tcs()
+    with TestClient(app) as client:
+        client.post(f"{PREFIX}/move-to", json={"azimuth": 120.0, "elevation": 45.0})
+        status = client.get(f"{PREFIX}/status").json()
+    assert (status["AzimuthMode"], status["ElevationMode"]) == ("Preset", "Preset")
+    assert status["AzimuthCommandedPosition"] == 120.0
+    assert status["ElevationCommandedPosition"] == 45.0
+
+
+def test_mock_tcs_relays_a_go_refusal_as_200():
+    """The mock relays each queued Go TCS refusal as the OCS API does, with HTTP
+    200 and Go's message: the busy reads as None, the start-time refusal as 400,
+    and the next POST, with the queue empty, as 200."""
+    app = create_mock_tcs()
+    app.state.recorder.refusals["path"] += [GO_BUSY, GO_START_TOO_SOON]
+    body = {"start_time": time.time() + 100.0, "coordsys": "Horizon",
+            "points": [[0.0, 100.0, 50.0, 0.5, 0.0]]}
+    with TestClient(app) as client:
+        replies = [client.post(f"{PREFIX}/path", json=body) for _ in range(3)]
+
+    assert [r.status_code for r in replies] == [200, 200, 200]
+    assert [tcs_response_status(r) for r in replies] == [None, 400, 200]
+    assert tcs_response_reason(replies[1]) == GO_START_TOO_SOON
+    assert len(app.state.recorder.path_bodies) == 3
 
 
 # ---------------------------------------------------------------------------

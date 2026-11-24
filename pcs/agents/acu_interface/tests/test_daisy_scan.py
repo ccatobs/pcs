@@ -23,9 +23,12 @@ Plus the dispatch-core guards:
   ``TrajectoryValidationError`` (a high-velocity / tight-turn Daisy drives accel
   over the hardware ceiling);
 - dispatch-delay: Daisy takes ``start_time`` literally, so its resolved start
-  equals the floored anchor and the guard passes trivially; the shared
-  :func:`enforce_dispatch_delay` raising-when-far behaviour is covered in
-  ``test_pong_scan.py``, and the buffer floor is verified here.
+  equals the floored anchor: the guard passes a start within
+  ``MAX_DISPATCH_DELAY_SEC`` of the dispatch and refuses one further out with a
+  sentence about the start time, not the elevation advice of the planners that
+  search for a crossing; the shared :func:`enforce_dispatch_delay` is also
+  tested directly in ``test_pong_scan.py``, and the buffer floor is verified
+  here.
 
 DATE-STABILITY: Daisy uses ``start_time`` literally, so the only date dependence is
 whether the source is observable (sun-safety disabled in the fixture). Every build
@@ -46,20 +49,21 @@ from fyst_trajectories import get_fyst_site
 from pcs.agents.acu_interface.trajectory import (
     MAX_DISPATCH_DELAY_SEC,
     SCAN_DISPATCH_BUFFER_SEC,
+    DispatchDelayError,
     TrajectoryValidationError,
     build_daisy_payload,
 )
 
 # Go TCS /path contract constants (commands.go checkAzEl + pathCmd.Check()).
-AZ_MIN_TCS = -180.0  # commands.go:18
-AZ_MAX_TCS = 360.0  # commands.go:19
-EL_MIN_TCS = -90.0  # commands.go:24
-EL_MAX_TCS = 180.0  # commands.go:25
-AZ_SPEED_MAX_TCS = 3.0  # commands.go:20
-EL_SPEED_MAX_TCS = 1.5  # commands.go:26
-MIN_DT_TCS = 0.05  # commands.go:261
-MIN_LEAD_TCS = 9.8  # commands.go:253
-FIRST_N_CHECKED = 100  # commands.go:269
+AZ_MIN_TCS = -180.0  # azimuthMin at TCS b7bbbf9
+AZ_MAX_TCS = 360.0  # azimuthMax at TCS b7bbbf9
+EL_MIN_TCS = -90.0  # elevationMin at TCS b7bbbf9
+EL_MAX_TCS = 180.0  # elevationMax at TCS b7bbbf9
+AZ_SPEED_MAX_TCS = 3.0  # azimuthSpeedMax at TCS b7bbbf9
+EL_SPEED_MAX_TCS = 1.5  # elevationSpeedMax at TCS b7bbbf9
+MIN_DT_TCS = 0.05  # pathCmd.Check at TCS b7bbbf9
+MIN_LEAD_TCS = 9.8  # checkProgramTrackStartTime at TCS b7bbbf9
+FIRST_N_CHECKED = 100  # pathCmd.Check at TCS b7bbbf9
 
 # A representative Daisy on a source well inside the FYST limits at the epoch.
 REPRESENTATIVE_PARAMS = dict(
@@ -121,21 +125,21 @@ def test_start_time_absolute_and_respects_buffer_floor(built):
     result, now = built
     start_time = result["payload"]["start_time"]
     assert start_time > 1e9
-    assert start_time >= now + MIN_LEAD_TCS  # commands.go:253
+    assert start_time >= now + MIN_LEAD_TCS  # checkProgramTrackStartTime at TCS b7bbbf9
     assert start_time >= now + SCAN_DISPATCH_BUFFER_SEC - 1e-6  # the 10 s floor
 
 
 def test_points_is_n_by_5(built):
     result, _ = built
     points = result["payload"]["points"]
-    assert len(points) > 0  # commands.go:246 "no points in path"
+    assert len(points) > 0  # pathCmd.Check at TCS b7bbbf9, "no points in path"
     assert all(len(p) == 5 for p in points)
 
 
 def test_consecutive_dt_at_least_50ms(built):
     result, _ = built
     times = np.array([p[0] for p in result["payload"]["points"]])
-    assert np.diff(times).min() >= MIN_DT_TCS  # commands.go:261
+    assert np.diff(times).min() >= MIN_DT_TCS  # pathCmd.Check at TCS b7bbbf9
 
 
 def test_first_100_points_satisfy_checkAzEl(built, site):
@@ -201,10 +205,10 @@ def test_too_aggressive_daisy_escalates_h3(site):
     """A high-velocity / tight-turn Daisy breaches a hardware ceiling and raises.
 
     velocity=3.0 with turn_radius=0.05 produces centripetal acceleration far
-    above the Go TCS hardware ceilings (commands.go:21/27, 6.0/1.5 deg/s^2),
-    which checkAzEl does NOT validate, so the agent must reject it BEFORE the
-    POST (and over the whole trajectory, not just the first 100 points). Date-
-    stable fixed ``now``.
+    above the Go TCS hardware ceilings (azimuthAccelMax/elevationAccelMax,
+    6.0/1.5 deg/s^2, at TCS ``b7bbbf9``), which checkAzEl does NOT validate, so the
+    agent must reject it BEFORE the POST (and over the whole trajectory, not just
+    the first 100 points). Date-stable fixed ``now``.
     """
     bad = dict(
         REPRESENTATIVE_PARAMS, velocity=3.0, turn_radius=0.05, start_acceleration=2.0
@@ -223,9 +227,10 @@ def test_too_aggressive_daisy_escalates_h3(site):
 
 
 # ---------------------------------------------------------------------------
-# Dispatch-delay guard. Daisy's start == the floored anchor, so it passes
-# the default guard trivially (the shared helper's raising path is covered in
-# test_pong_scan.py). The buffer floor is verified here.
+# Dispatch-delay guard. Daisy's start == the floored anchor, so it passes the
+# default guard for a start within MAX_DISPATCH_DELAY_SEC of the dispatch and
+# is refused for a scheduled start further out. The buffer floor is verified
+# here.
 # ---------------------------------------------------------------------------
 
 
@@ -242,6 +247,25 @@ def test_daisy_passes_default_dispatch_delay_guard(site):
         )  # default max_dispatch_delay_sec
     delay = result["payload"]["start_time"] - FIXED_NOW
     assert 0.0 < delay <= MAX_DISPATCH_DELAY_SEC
+
+
+def test_a_start_an_hour_out_is_refused_with_advice_about_the_start(site):
+    """A daisy scheduled an hour out is refused under the default bound, and the
+    refusal says to dispatch it closer to its time: a daisy starts at its
+    scheduled time, so the elevation advice the crossing-searching planners give
+    does not apply to it."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        with pytest.raises(DispatchDelayError, match=r"dispatched closer to its time") as excinfo:
+            build_daisy_payload(
+                scan_params=REPRESENTATIVE_PARAMS,
+                current_az=200.0,
+                current_el=60.0,
+                site=site,
+                scheduled_t0_unix=FIXED_NOW + 3600.0,
+                now_unix=FIXED_NOW,
+            )  # default max_dispatch_delay_sec
+    assert "promptly-reachable elevation" not in str(excinfo.value)
 
 
 def test_scheduled_t0_in_past_is_floored(site):

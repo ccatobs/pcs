@@ -59,6 +59,18 @@ def test_scan_pattern_from_file_503_returns_empty_dict(tmp_path, monkeypatch):
     assert result is not None
 
 
+def test_scan_pattern_from_file_keeps_the_sub_second_lead(tmp_path, monkeypatch):
+    """``start_time`` is ten seconds out to the sub-second, clearing the Go TCS's
+    9.8 s minimum lead."""
+    captured = {}
+    client = _client()
+    monkeypatch.setattr(
+        client, "scan_pattern", lambda data: captured.update(data) or {})
+    monkeypatch.setattr(aculib.time, "time", lambda: 1_800_000_000.95)
+    client.scan_pattern_from_file(_write_points(tmp_path))
+    assert abs(captured["start_time"] - 1_800_000_010.95) < 1e-6
+
+
 def test_scan_pattern_from_file_passes_parsed_points(tmp_path, monkeypatch):
     """The file is parsed into float rows and handed to scan_pattern as 'points'."""
     captured = {}

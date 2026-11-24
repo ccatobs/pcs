@@ -13,6 +13,7 @@ devices:
         'main':
           'acu_name': 'PositionBroadcast'
           'port': 5601
+          # ACU simulator v0.7.0 or later needs 'v1' (see stream_schemas).
           'schema': 'v0'
       # Certificates
       'certs':
@@ -283,10 +284,16 @@ devices:
         'PositionBroadcast_target': '192.168.1.109:10001'
         'PositionBroadcastExt_target': '192.168.1.109:10002'
 
+# The UDP position broadcast's record layouts; streams.main.schema of a device picks one.
+# v0: ACU simulator up to v0.6.0. v1: ACU simulator from v0.7.0 (antenna-control-unit
+# b3373b4), which sends the commanded position after Time.
 stream_schemas:
   v0:
     format: '<Lddddddddddd'
     fields: ['Day', 'Time', 'Azimuth', 'Elevation', 'AzEncoder', 'ElEncoder', 'AzCurrent1', 'AzCurrent2', 'AzCurrent3', 'AzCurrent4', 'ElCurrent1', 'ElCurrent2']
+  v1:
+    format: '<Lddddddddddddd'
+    fields: ['Day', 'Time', 'AzCommand', 'ElCommand', 'Azimuth', 'Elevation', 'AzEncoder', 'ElEncoder', 'AzCurrent1', 'AzCurrent2', 'AzCurrent3', 'AzCurrent4', 'ElCurrent1', 'ElCurrent2']
 
 datasets:
   ccat:

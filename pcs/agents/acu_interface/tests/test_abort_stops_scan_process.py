@@ -39,7 +39,6 @@ Windows), so the module skip-guards like its siblings.
 """
 
 import importlib.util
-import sys
 import types
 
 import pytest

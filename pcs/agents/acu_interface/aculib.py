@@ -1,20 +1,24 @@
 #!/bin/python
 
 import os, yaml, json, sys
-import time, datetime
+import time
 import socket, struct, requests
 
 #: Global variable to hold the most-recent config block from calling
 
 cache = None
 
-#: Per-request HTTP timeout (seconds) for TCS calls. Without it a hung Go TCS
-#: blocks the synchronous requests call indefinitely, freezing the reactor thread
-#: and every Process on it, including the 200 Hz broadcast the constant_el_scan
-#: slew gate polls. The (connect, read) tuple bounds both phases; the read budget
-#: is generous so a slow-but-alive TCS is not killed mid-response (the scan loops
-#: have their own wall-clock backstops on top).
+#: Per-request HTTP timeout (s) for TCS calls, (connect, read). Without it a hung Go
+#: TCS blocks the call indefinitely: on the reactor thread that freezes every Process,
+#: the 200 Hz broadcast included; in a worker thread it holds the task, and a typed
+#: scan's azel_lock. The read budget is generous so a slow TCS is not cut off.
 TCS_HTTP_TIMEOUT = (5, 30)  # (connect, read) seconds
+
+#: The Go TCS refuses a program-track start under 9.8 s out
+#: (checkProgramTrackStartTime at TCS b7bbbf9, its pad on the ACU Extension
+#: ICD's 5 s minimum); 10 s clears it.
+SCAN_DISPATCH_BUFFER_SEC: float = 10.0
+
 
 def load_config(filename=None, update_cache=True):
     '''Load ACU configuration file and return the settings content
@@ -50,7 +54,11 @@ def get_stream_schema(version):
 
     Returns the ACU UDP data stream structure.
     '''
-    return cache['stream_schemas'][version]
+    try:
+        return cache['stream_schemas'][version]
+    except KeyError:
+        raise KeyError(f"stream schema {version!r} is not in stream_schemas of the config "
+                       f"(named by streams.main.schema of the device)") from None
 
 def get_datagram(raw_data, decoded_data,
                  fmt, fmt_len):
@@ -120,7 +128,7 @@ class observatory_control_system:
         self.session.cert = (self.client_cert, self.client_key)
 
     def post(self, cmd, data):
-        if data == "":
+        if not data:
             self.log.info(f"sending {self.url}{cmd}")
         else:
             self.log.info(f"sending {data} to {self.url}{cmd}")
@@ -169,7 +177,11 @@ class observatory_control_system:
     
     def abort(self):
         cmd = f"{self.url_prefix}/abort"
-        r = self.post(cmd, "")
+        # No body: a Go TCS reached directly refuses an /abort with one, even ""
+        # (checkNoBody at TCS b7bbbf9); the OCS API forwards none.
+        r = self.post(cmd, None)
+        if not hasattr(r, "content"):
+            raise RuntimeError(f"{cmd}: HTTP 503, no answer from the TCS")
         response = json.loads(r.content.decode())
         self.log.info(response)
         return response
@@ -200,18 +212,25 @@ class observatory_control_system:
         cmd = f"{self.url_prefix}/move-to"
         data = {"azimuth": azimuth, "elevation": elevation}
         response = self.post(cmd, data)
-        # ``post`` returns {} (not a Response) on HTTP 503; guard the .json()
-        # log so a 503 from /move-to does not raise AttributeError inside the
-        # client. The caller's status guard then handles the {} gracefully.
+        # ``post`` returns {} (not a Response) on HTTP 503, and the OCS API's own
+        # HTTP 500 body is plain text, not JSON: log either without raising.
         if hasattr(response, "json"):
-            self.log.info(response.json())
+            try:
+                self.log.info(response.json())
+            except ValueError:
+                self.log.info(response.text)
         return response
 
     def azimuth_scan(self, start_time: float, elevation: float,
                      azimuth_range: list, num_scans: int,
                      turnaround_time: float, speed: float):
         """send telescope on an azimuth scan at a constant elevation
-        :start_time: time in future to begin scan, in format %Y-%m-%dT%H:%M:%SZ
+        :start_time: when to begin, as Unix seconds, or seconds from now below 1e5
+            (the agent's az_scan converts an ISO-8601 string). Go TCS b5666ae and later
+            first move the dish to (azimuth_range[0], elevation): 0 starts the scan about
+            10 s after that move (earlier builds refuse it), and any other start must leave
+            the move time plus 5 s; a 200 means queued, so a start reached too late fails
+            after this returns.
         :param elevation: elevation of telescope in deg
         :param azimuth_range: list with 2 floats containing range of azimuth
         :param num_scan: numbers of cycles of the azimuth scan
@@ -248,16 +267,16 @@ class observatory_control_system:
                 # Append the row to the master list
                 points.append(row)
         # Now data_rows contains each row of the file as a list
-        start_dt = datetime.datetime.now() + datetime.timedelta(seconds=10)
+        # The fraction of a second is kept: a start truncated to the second can
+        # be under 9.8 s out.
         data = {
-                "start_time": float(f"{time.mktime(start_dt.timetuple()):3.5f}"),
+                "start_time": time.time() + SCAN_DISPATCH_BUFFER_SEC,
                 "coordsys": "Horizon",
                 "points": points
                 }
         # Return scan_pattern's value (Response on success, {} on a 503
-        # short-circuit) instead of None, matching every other command method, so
-        # the caller can read the status via tcs_response_status. Returning None
-        # made msg.status_code crash on EVERY call.
+        # short-circuit), as every other command method does, so the caller can
+        # read the status via tcs_response_status.
         return self.scan_pattern(data)
 
     # def wait(self, cmd): ''' make generic for all commands ? '''

@@ -8,18 +8,17 @@ which is NOT thread-safe. Before the fix the agent reused the single shared
 ``self.acu_read`` client from three places that can run at once on DIFFERENT
 threads:
 
-* the always-on ``monitor`` Process (reactor thread; on by default, NOT gated by
-  ``azel_lock``), ``self.acu_read.get_status()``;
+* the always-on ``monitor`` Process (on by default, NOT gated by ``azel_lock``),
+  ``self.acu_read.get_status()`` in a pool thread;
 * a running scan's thread-pool calls in ``_dispatch_scan_process``
   (``deferToThread`` worker), ``move_to`` / ``get_status`` / ``scan_pattern``;
 * the standalone ``abort`` task's ``/abort`` POST.
 
 So a scan's pool-thread GET/POST could enter the very Session the monitor's
-reactor thread was mid-request on (highest-severity: abort-vs-scan). The fix
+pool thread was mid-request on (highest-severity: abort-vs-scan). The fix
 gives every scan (and the ``abort`` task) its OWN client via
-:meth:`ACUAgent._make_tcs`, leaving only the monitor + the
-(reactor-thread-serialized) ``_current_encoder_azel`` fallback on
-``self.acu_read``.
+:meth:`ACUAgent._make_tcs`, leaving only the monitor on ``self.acu_read``; the
+cold-broadcast fallback in ``_current_encoder_azel`` reads the per-scan client.
 
 What this file proves, deterministically, not by luck
 -------------------------------------------------------
@@ -94,10 +93,9 @@ class _Log:
     warn = warning = error = debug = info
 
 
-# A cert-less device block: empty cert strings route start_session down its
-# cert-less branch (aculib.py:103-107), so _make_tcs builds a real
-# requests.Session with no filesystem/network dependency. This is exactly the
-# "cert-less device block" case the _make_tcs docstring documents.
+# A cert-less device block: empty cert strings route aculib's start_session down
+# its cert-less branch, so _make_tcs builds a real requests.Session with no
+# filesystem/network dependency.
 def _bare_agent(base_url):
     """Real ACUAgent with just enough state to call the REAL _make_tcs +
     construct the REAL shared self.acu_read, both via the genuine
@@ -106,8 +104,7 @@ def _bare_agent(base_url):
     a = _AGENT.ACUAgent.__new__(_AGENT.ACUAgent)
     a.log = _Log()
     a.acu_conf = {"base_url": base_url, "certs": {"verify": False}}
-    # The shared client the monitor + _current_encoder_azel use, built the same
-    # way the real __init__ builds it (aculib.py:82) but cert-less.
+    # The shared client the monitor uses, built as __init__ builds it, cert-less.
     a.acu_read = _ACULIB.observatory_control_system(base_url, a.log, verify_cert=False)
     # Cold broadcast so _current_encoder_azel falls through to its status read,
     # the path the fallback-routing tests exercise.
@@ -206,8 +203,8 @@ def _loopback_server():
         def _reply(self):
             body = (
                 b'{"status": "ok", "message": "ok", '
-                b'"Qty of free program track stack positions": 9999, '
-                b'"Azimuth current velocity": 0.0, "Elevation current velocity": 0.0}'
+                b'"QtyOfFreeProgramTrackStackPositions": 9999, '
+                b'"AzimuthCurrentVelocity": 0.0, "ElevationCurrentVelocity": 0.0}'
             )
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -265,7 +262,7 @@ def _drive_two_threads(monitor_call, scan_call, barrier, *, require_clean=True):
 
 def test_fix_no_session_entered_concurrently():
     """Drive the REAL agent paths concurrently: monitor's
-    ``self.acu_read.get_status()`` (reactor thread) vs a scan's
+    ``self.acu_read.get_status()`` (pool thread) vs a scan's
     ``scan_pattern(...)`` + ``get_status()`` on a fresh ``_make_tcs()`` client
     (pool thread). The Sessions are distinct, so each peak concurrency is exactly
     1 even though the two HTTP calls genuinely overlap (meter window + barrier)."""
@@ -284,7 +281,7 @@ def test_fix_no_session_entered_concurrently():
         barrier = threading.Barrier(2)
         with _ConcurrencyMeter(barrier) as meter:
             _drive_two_threads(
-                monitor_call=agent.acu_read.get_status,  # reactor-thread path
+                monitor_call=agent.acu_read.get_status,  # the monitor's pool-thread path
                 scan_call=lambda: (
                     scan_tcs.scan_pattern(payload),  # POST  (Session.request)
                     scan_tcs.get_status(),  # GET   (Session.request)
@@ -383,7 +380,7 @@ def test_monitor_offreactor_and_fallback_no_shared_session():
         barrier = threading.Barrier(2)
         with _ConcurrencyMeter(barrier) as meter:
             _drive_two_threads(
-                monitor_call=agent.acu_read.get_status,  # Session A (reactor path)
+                monitor_call=agent.acu_read.get_status,  # Session A (the monitor's path)
                 # Cold broadcast -> _current_encoder_azel hits tcs.get_status()
                 # on the per-scan client (Session B), the post-fix fallback.
                 scan_call=lambda: agent._current_encoder_azel(scan_tcs),
@@ -424,8 +421,8 @@ def test_control_fallback_on_acu_read_races():
             if "Azimuth" in bcast and "Elevation" in bcast:
                 return float(bcast["Azimuth"]), float(bcast["Elevation"]), "broadcast"
             status = shared.get_status()  # <-- the shared Session, the hazard
-            return (status.get("Azimuth current position"),
-                    status.get("Elevation current position"), "status")
+            return (status.get("AzimuthCurrentPosition"),
+                    status.get("ElevationCurrentPosition"), "status")
 
         barrier = threading.Barrier(2)
         with _ConcurrencyMeter(barrier) as meter:

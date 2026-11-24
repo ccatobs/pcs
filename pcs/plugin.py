@@ -8,5 +8,7 @@ agents = {
     'DymoAgent': {'module': 'pcs.agents.dymo.agent', 'entry_point': 'main'},
     'TeledyneAgent': {'module': 'pcs.agents.teledyne.agent', 'entry_point': 'main'},
     'PfeifferAgent': {'module': 'pcs.agents.pfeiffer_singlegauge.agent', 'entry_point': 'main'},
-    'Adam_Agent':{'module': 'pcs.agents.adam.agent', 'entry_point': 'main'}
+    'Adam_Agent':{'module': 'pcs.agents.adam.agent', 'entry_point': 'main'},
+    'Scheduler_Loop_Agent': {'module': 'pcs.agents.scheduler_loop.agent', 'entry_point': 'main'},
+
 }

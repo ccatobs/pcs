@@ -24,6 +24,13 @@ fyst-trajectories @ git+https://github.com/ccatobs/fyst-trajectories.git@a8eb333
 pyusb
 libusb
 
+# For Scheduler Loop agent
+astroplan @ git+https://github.com/ccatobs/astroplan.git@main
+# sun-avoidance @ git+https://github.com/ccatobs/sun-avoidance.git@main
+# astroplan @ git+ssh://git@github.com/ccatobs/astroplan.git@main
+sun-avoidance @ git+ssh://git@github.com/ccatobs/sun-avoidance.git@main
+
+
 # Docs
 # see docs/requirements.txt
 

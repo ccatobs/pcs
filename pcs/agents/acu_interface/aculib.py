@@ -158,7 +158,8 @@ class observatory_control_system:
 
     def get_status(self):
         cmd = f"{self.url_prefix}/status"
-        self.log.info(f"getting status from {self.url}{cmd}")
+        # temporarily (?) disabling since this spams the log
+        # self.log.info(f"getting status from {self.url}{cmd}")
         try:
             r = self.session.get(
                     self.url + cmd, verify=self.verify_cert, timeout=TCS_HTTP_TIMEOUT
@@ -185,6 +186,21 @@ class observatory_control_system:
         self.log.info(response)
         return response
 
+    # def stop(self):
+    #     cmd = f"{self.url_prefix}/abort" #is the abort command right?
+    #     r = self.post(cmd, "")
+    #     response = json.loads(r.content.decode())
+    #     self.log.info(response)
+    #     #post command to change az and el modes to stop
+    #     return response
+
+    def clear(self):
+        # clears the ProgramTrack stack and sets Az and El modes to "Stop"
+        cmd = f"{self.url_prefix}/clear-track"
+        r = self.post(cmd, "")
+        response = json.loads(r.content.decode())
+        self.log.info(response)
+        return response
 
     def move_to(self, azimuth: float, elevation: float):
         """send telescope to a given azimuth,elevation
@@ -263,6 +279,15 @@ class observatory_control_system:
         # read the status via tcs_response_status.
         return self.scan_pattern(data)
 
+    # def wait(self, cmd): ''' make generic for all commands ? '''
+    #     # Nolta manual post command to STOP
+    #     response = self.post(cmd, data)
+    #     if response:
+    #         return response
+    #     else :
+    #         time.sleep(0.1)
+    #         # wait to read response from STOP command before continue
+        
 
 
 

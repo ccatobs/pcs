@@ -8,6 +8,7 @@ devices:
 
       # Sleep time to wait for motion to end.
       'motion_waittime': 1.0
+
       # List of streams to configure.
       'streams':
         'main':
